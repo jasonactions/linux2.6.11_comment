@@ -1,0 +1,1 @@
+#define CONFIG_VFAT_FS 1

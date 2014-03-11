@@ -1,0 +1,1 @@
+#define CONFIG_SCSI_QLA2XXX 1

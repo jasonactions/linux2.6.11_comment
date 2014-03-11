@@ -1,0 +1,1 @@
+#define CONFIG_ACPI_SLEEP 1

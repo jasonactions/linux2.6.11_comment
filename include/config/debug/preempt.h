@@ -1,0 +1,1 @@
+#define CONFIG_DEBUG_PREEMPT 1

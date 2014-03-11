@@ -1,0 +1,1 @@
+#define CONFIG_SND_INTEL8X0 1

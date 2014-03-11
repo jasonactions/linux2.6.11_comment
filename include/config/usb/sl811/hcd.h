@@ -1,0 +1,1 @@
+#undef CONFIG_USB_SL811_HCD

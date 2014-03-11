@@ -1,0 +1,1 @@
+#define CONFIG_PREEMPT 1

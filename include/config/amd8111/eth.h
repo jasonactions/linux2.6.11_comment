@@ -1,0 +1,1 @@
+#undef CONFIG_AMD8111_ETH

@@ -1,0 +1,1 @@
+#define CONFIG_PM_STD_PARTITION ""

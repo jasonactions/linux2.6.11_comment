@@ -1,0 +1,1 @@
+#define CONFIG_PCI_LEGACY_PROC 1

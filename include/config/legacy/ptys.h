@@ -1,0 +1,1 @@
+#define CONFIG_LEGACY_PTYS 1

@@ -1,0 +1,1 @@
+#undef CONFIG_SERIO_PCIPS2

@@ -1,0 +1,1 @@
+#define CONFIG_USB_UHCI_HCD 1

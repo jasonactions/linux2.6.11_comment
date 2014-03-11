@@ -1,0 +1,1 @@
+#define CONFIG_CC_ALIGN_LABELS 0

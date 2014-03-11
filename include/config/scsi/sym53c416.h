@@ -1,0 +1,1 @@
+#undef CONFIG_SCSI_SYM53C416

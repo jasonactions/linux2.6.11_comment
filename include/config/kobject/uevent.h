@@ -1,0 +1,1 @@
+#define CONFIG_KOBJECT_UEVENT 1

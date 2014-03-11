@@ -1,0 +1,1 @@
+#define CONFIG_INPUT_MOUSEDEV 1

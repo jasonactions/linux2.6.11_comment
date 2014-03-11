@@ -1,0 +1,1 @@
+#define CONFIG_CLEAN_COMPILE 1

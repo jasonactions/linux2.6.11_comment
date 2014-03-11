@@ -1,0 +1,1 @@
+#define CONFIG_MPENTIUM4 1

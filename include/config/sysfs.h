@@ -1,0 +1,1 @@
+#define CONFIG_SYSFS 1

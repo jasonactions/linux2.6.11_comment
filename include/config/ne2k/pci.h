@@ -1,0 +1,1 @@
+#undef CONFIG_NE2K_PCI

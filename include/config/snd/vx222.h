@@ -1,0 +1,1 @@
+#undef CONFIG_SND_VX222

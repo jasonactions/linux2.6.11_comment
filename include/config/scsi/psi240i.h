@@ -1,0 +1,1 @@
+#undef CONFIG_SCSI_PSI240I

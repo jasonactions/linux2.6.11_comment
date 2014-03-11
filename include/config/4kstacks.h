@@ -1,0 +1,1 @@
+#define CONFIG_4KSTACKS 1

@@ -1,0 +1,1 @@
+#undef CONFIG_MOUSE_PC110PAD

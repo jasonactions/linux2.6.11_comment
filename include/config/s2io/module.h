@@ -1,0 +1,1 @@
+#define CONFIG_S2IO_MODULE 1

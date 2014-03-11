@@ -1,0 +1,1 @@
+#define CONFIG_BLK_DEV_GENERIC 1

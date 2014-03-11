@@ -1,0 +1,1 @@
+#undef CONFIG_SCSI_QLOGIC_FAS

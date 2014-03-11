@@ -1,0 +1,1 @@
+#undef CONFIG_SND_EMU10K1

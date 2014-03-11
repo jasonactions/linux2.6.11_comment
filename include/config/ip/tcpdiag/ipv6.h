@@ -1,0 +1,1 @@
+#undef CONFIG_IP_TCPDIAG_IPV6

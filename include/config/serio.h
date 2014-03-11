@@ -1,0 +1,1 @@
+#define CONFIG_SERIO 1

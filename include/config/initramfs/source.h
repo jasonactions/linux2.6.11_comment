@@ -1,0 +1,1 @@
+#define CONFIG_INITRAMFS_SOURCE ""

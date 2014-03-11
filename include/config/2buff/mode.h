@@ -1,0 +1,1 @@
+#undef CONFIG_2BUFF_MODE

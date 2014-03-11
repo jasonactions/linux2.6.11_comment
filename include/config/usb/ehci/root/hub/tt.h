@@ -1,0 +1,1 @@
+#undef CONFIG_USB_EHCI_ROOT_HUB_TT

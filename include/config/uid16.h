@@ -1,0 +1,1 @@
+#define CONFIG_UID16 1

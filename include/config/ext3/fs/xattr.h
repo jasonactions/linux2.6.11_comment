@@ -1,0 +1,1 @@
+#define CONFIG_EXT3_FS_XATTR 1

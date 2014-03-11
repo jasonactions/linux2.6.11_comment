@@ -1,0 +1,1 @@
+#define CONFIG_DUMMY_CONSOLE 1

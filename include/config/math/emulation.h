@@ -1,0 +1,1 @@
+#undef CONFIG_MATH_EMULATION

@@ -1,0 +1,1 @@
+#undef CONFIG_IDE_TASK_IOCTL

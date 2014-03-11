@@ -1,0 +1,1 @@
+#define CONFIG_NLS_ISO8859_1 1

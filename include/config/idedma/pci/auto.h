@@ -1,0 +1,1 @@
+#define CONFIG_IDEDMA_PCI_AUTO 1

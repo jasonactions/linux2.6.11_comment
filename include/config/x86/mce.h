@@ -1,0 +1,1 @@
+#define CONFIG_X86_MCE 1

@@ -1,0 +1,1 @@
+#define CONFIG_8139TOO_PIO 1

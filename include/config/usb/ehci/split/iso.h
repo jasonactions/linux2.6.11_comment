@@ -1,0 +1,1 @@
+#undef CONFIG_USB_EHCI_SPLIT_ISO

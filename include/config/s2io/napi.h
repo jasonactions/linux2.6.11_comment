@@ -1,0 +1,1 @@
+#undef CONFIG_S2IO_NAPI

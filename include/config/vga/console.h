@@ -1,0 +1,1 @@
+#define CONFIG_VGA_CONSOLE 1

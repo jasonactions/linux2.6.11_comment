@@ -1,0 +1,1 @@
+#define CONFIG_MOUSE_PS2 1

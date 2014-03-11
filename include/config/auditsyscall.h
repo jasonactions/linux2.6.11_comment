@@ -1,0 +1,1 @@
+#define CONFIG_AUDITSYSCALL 1

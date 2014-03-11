@@ -1,0 +1,1 @@
+#define CONFIG_MSDOS_FS 1

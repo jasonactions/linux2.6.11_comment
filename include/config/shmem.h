@@ -1,0 +1,1 @@
+#define CONFIG_SHMEM 1

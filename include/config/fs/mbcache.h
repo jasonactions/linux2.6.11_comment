@@ -1,0 +1,1 @@
+#define CONFIG_FS_MBCACHE 1

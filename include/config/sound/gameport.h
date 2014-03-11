@@ -1,0 +1,1 @@
+#define CONFIG_SOUND_GAMEPORT 1
