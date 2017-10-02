@@ -1529,6 +1529,9 @@ out:
 	jh->b_transaction = NULL;
 }
 
+/**
+ * 将缓冲区从当前的链表中摘除。
+ */
 void journal_unfile_buffer(journal_t *journal, struct journal_head *jh)
 {
 	jbd_lock_bh_state(jh2bh(jh));
@@ -1977,6 +1980,9 @@ void __journal_file_buffer(struct journal_head *jh,
 		set_buffer_jbddirty(bh);
 }
 
+/**
+ * 将日志缓冲区加入到某个链表中。
+ */
 void journal_file_buffer(struct journal_head *jh,
 				transaction_t *transaction, int jlist)
 {

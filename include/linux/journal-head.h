@@ -29,6 +29,9 @@ struct journal_head {
 	/*
 	 * Journalling list for this buffer [jbd_lock_bh_state()]
 	 */
+	/**
+	 * 当前缓冲区位于日志的哪个链表中。
+	 */
 	unsigned b_jlist;
 
 	/*

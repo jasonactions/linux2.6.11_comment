@@ -445,10 +445,23 @@ struct transaction_s
 	 * KLUDGE: [use j_state_lock]
 	 */
 	enum {
+		/*
+		 * 事务正在运行，可以接收新的原子操作。
+		 */
 		T_RUNNING,
+		/**
+		 * 事务已经被锁，不接收新的原子操作。
+		 */
 		T_LOCKED,
 		T_RUNDOWN,
+		/**
+		 * 事务正准备被提交到日志中。
+		 * 新的原子操作，需要放到新的事务中。
+		 */
 		T_FLUSH,
+		/**
+		 * 正在将事务的元数据提交到日志中。
+		 */
 		T_COMMIT,
 		T_FINISHED 
 	}			t_state;
@@ -477,11 +490,18 @@ struct transaction_s
 	 * Doubly-linked circular list of all metadata buffers owned by this
 	 * transaction [j_list_lock]
 	 */
+	/**
+	 * 所有元数据缓冲区的链表。
+	 */
 	struct journal_head	*t_buffers;
 
 	/*
 	 * Doubly-linked circular list of all data buffers still to be
 	 * flushed before this transaction can be committed [j_list_lock]
+	 */
+	/**
+	 * 与当前事务相关的数据缓冲区。
+	 * 在ordered模式下，应当首先将其写入磁盘，再写入元数据。
 	 */
 	struct journal_head	*t_sync_datalist;
 
@@ -489,6 +509,10 @@ struct transaction_s
 	 * Doubly-linked circular list of all forget buffers (superseded
 	 * buffers which we can un-checkpoint once this transaction commits)
 	 * [j_list_lock]
+	 */
+	/**
+	 * 一旦本事务被提交，就可以废弃的缓冲区。
+	 * 主要是与前面的事务共享的元数据缓冲区。
 	 */
 	struct journal_head	*t_forget;
 
@@ -502,6 +526,10 @@ struct transaction_s
 	 * Doubly-linked circular list of temporary buffers currently undergoing
 	 * IO in the log [j_list_lock]
 	 */
+	/**
+	 * 当前正在等待IO写入的链表。
+	 * 此链表中的数据，包含了要写入到日志中的元数据缓冲区。
+	 */
 	struct journal_head	*t_iobuf_list;
 
 	/*
@@ -514,6 +542,10 @@ struct transaction_s
 	/*
 	 * Doubly-linked circular list of control buffers being written to the
 	 * log. [j_list_lock]
+	 */
+	/**
+	 * 等待写入IO的链表。
+	 * 此链表中的数据，包含要写入到日志中的控制块。
 	 */
 	struct journal_head	*t_log_list;
 
@@ -643,11 +675,18 @@ struct journal_s
 	 * Transactions: The current running transaction...
 	 * [j_state_lock] [caller holding open handle]
 	 */
+	/**
+	 * 当前正在运行的事务。
+	 * 如果为NULL，需要为新的原子操作创建新的事务。
+	 */
 	transaction_t		*j_running_transaction;
 
 	/*
 	 * the transaction we are pushing to disk
 	 * [j_state_lock] [caller holding open handle]
+	 */
+	/**
+	 * 当前正在提交的事务。
 	 */
 	transaction_t		*j_committing_transaction;
 

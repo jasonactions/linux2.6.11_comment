@@ -99,6 +99,9 @@ static int inverted_lock(journal_t *journal, struct buffer_head *bh)
  * The primary function for committing a transaction to the log.  This
  * function is called by the journal thread to begin a complete commit.
  */
+/**
+ * 提交日志的主函数。
+ */
 void journal_commit_transaction(journal_t *journal)
 {
 	transaction_t *commit_transaction;
@@ -141,6 +144,11 @@ void journal_commit_transaction(journal_t *journal)
 	commit_transaction = journal->j_running_transaction;
 	J_ASSERT(commit_transaction->t_state == T_RUNNING);
 
+	/**
+	 * 第一个阶段
+	 * 将事务从运行状态转换为锁定状态。
+	 * 这意味着事务不再接受新的原子操作。
+	 */
 	jbd_debug(1, "JBD: starting commit of transaction %d\n",
 			commit_transaction->t_tid);
 
@@ -148,6 +156,9 @@ void journal_commit_transaction(journal_t *journal)
 	commit_transaction->t_state = T_LOCKED;
 
 	spin_lock(&commit_transaction->t_handle_lock);
+	/**
+	 * 等待已经存在的原子操作完成。
+	 */
 	while (commit_transaction->t_updates) {
 		DEFINE_WAIT(wait);
 
@@ -183,6 +194,10 @@ void journal_commit_transaction(journal_t *journal)
 	 * that multiple journal_get_write_access() calls to the same
 	 * buffer are perfectly permissable.
 	 */
+	/**
+	 * 在初始化事务时，有一些预留的缓存区。
+	 * 这些缓冲区可能没有被使用，因此 
+	 */
 	while (commit_transaction->t_reserved_list) {
 		jh = commit_transaction->t_reserved_list;
 		JBUFFER_TRACE(jh, "reserved, unused: refile");
@@ -209,6 +224,9 @@ void journal_commit_transaction(journal_t *journal)
 	 * frees some memory
 	 */
 	spin_lock(&journal->j_list_lock);
+	/**
+	 * 整理chckpoint链表，为提交日志做准备。
+	 */
 	__journal_clean_checkpoint_list(journal);
 	spin_unlock(&journal->j_list_lock);
 
@@ -219,13 +237,26 @@ void journal_commit_transaction(journal_t *journal)
 	 */
 	journal_switch_revoke_table(journal);
 
+	/**
+	 * 将待提交的事务标记为T_FLUSH状态。
+	 */
 	commit_transaction->t_state = T_FLUSH;
+	/**
+	 * 将事务标记为当前提交的事务。
+	 */
 	journal->j_committing_transaction = commit_transaction;
+	/**
+	 * 标记当前没有正在运行的事务。
+	 * 因此，新的原子操作需要启动新的事务。
+	 */
 	journal->j_running_transaction = NULL;
 	commit_transaction->t_log_start = journal->j_head;
 	wake_up(&journal->j_wait_transaction_locked);
 	spin_unlock(&journal->j_state_lock);
 
+	/**
+	 * 第二阶段，将缓存区写入到磁盘。
+	 */
 	jbd_debug (3, "JBD: commit phase 2\n");
 
 	/*
@@ -248,6 +279,9 @@ write_out_data:
 	cond_resched();
 	spin_lock(&journal->j_list_lock);
 
+	/**
+	 * 首先将数据缓冲区写入到磁盘。
+	 */
 	while (commit_transaction->t_sync_datalist) {
 		struct buffer_head *bh;
 
@@ -271,10 +305,16 @@ write_out_data:
 				BUFFER_TRACE(bh, "start journal writeout");
 				get_bh(bh);
 				wbuf[bufs++] = bh;
+				/**
+				 * 脏缓冲区较多，先提交到磁盘。
+				 */
 				if (bufs == ARRAY_SIZE(wbuf)) {
 					jbd_debug(2, "submit %d writes\n",
 							bufs);
 					spin_unlock(&journal->j_list_lock);
+					/**
+					 * 将缓冲区直接提交到磁盘中，注意不是日志中。
+					 */
 					ll_rw_block(WRITE, bufs, wbuf);
 					journal_brelse_array(wbuf, bufs);
 					bufs = 0;
@@ -296,6 +336,9 @@ write_out_data:
 		}
 	}
 
+	/**
+	 * 将剩余的缓冲区写入到磁盘中。
+	 */
 	if (bufs) {
 		spin_unlock(&journal->j_list_lock);
 		ll_rw_block(WRITE, bufs, wbuf);
@@ -305,6 +348,10 @@ write_out_data:
 
 	/*
 	 * Wait for all previously submitted IO to complete.
+	 */
+	/**
+	 * 前面的ll_rw_block操作只是提交了IO请求。
+	 * 这里等待所有请求真正完成。
 	 */
 	while (commit_transaction->t_locked_list) {
 		struct buffer_head *bh;
@@ -342,6 +389,9 @@ write_out_data:
 
 	journal_write_revoke_records(journal, commit_transaction);
 
+	/**
+	 * 原数据仍然在内存中，开始处理元数据。
+	 */
 	jbd_debug(3, "JBD: commit phase 2\n");
 
 	/*
@@ -359,6 +409,9 @@ write_out_data:
 	 * transaction!  Now comes the tricky part: we need to write out
 	 * metadata.  Loop over the transaction's entire buffer list:
 	 */
+	/**
+	 * 标记正在写入元数据到日志中。
+	 */
 	commit_transaction->t_state = T_COMMIT;
 
 	descriptor = NULL;
@@ -372,6 +425,9 @@ write_out_data:
 		/* If we're in abort mode, we just un-journal the buffer and
 		   release it for background writing. */
 
+		/**
+		 * 特殊情况，中止日志恢复，忽略事务。
+		 */
 		if (is_journal_aborted(journal)) {
 			JBUFFER_TRACE(jh, "journal is aborting: refile");
 			journal_refile_buffer(journal, jh);
@@ -387,6 +443,9 @@ write_out_data:
 		/* Make sure we have a descriptor block in which to
 		   record the metadata buffer. */
 
+		/**
+		 * 目前还没有日志描述符块。
+		 */
 		if (!descriptor) {
 			struct buffer_head *bh;
 
@@ -424,6 +483,9 @@ write_out_data:
 
 		/* Where is the buffer to be written? */
 
+		/**
+		 * 计算元数据块应当放到哪一个日志块中。
+		 */
 		err = journal_next_log_block(journal, &blocknr);
 		/* If the block mapping failed, just abandon the buffer
 		   and repeat this loop: we'll fall into the
@@ -457,6 +519,9 @@ write_out_data:
 		 * (which is of type BJ_IO)
 		 */
 		JBUFFER_TRACE(jh, "ph3: write metadata");
+		/**
+		 * 准备元数据到缓冲区中。
+		 */
 		flags = journal_write_metadata_buffer(commit_transaction,
 						      jh, &new_jh, blocknr);
 		set_bit(BH_JWrite, &jh2bh(new_jh)->b_state);
@@ -487,6 +552,9 @@ write_out_data:
 		/* If there's no more to do, or if the descriptor is full,
 		   let the IO rip! */
 
+		/**
+		 * 缓冲区数量过多，先提交一次。
+		 */
 		if (bufs == ARRAY_SIZE(wbuf) ||
 		    commit_transaction->t_buffers == NULL ||
 		    space_left < sizeof(journal_block_tag_t) + 16) {
@@ -535,6 +603,9 @@ start_journal_io:
 	 * See __journal_try_to_free_buffer.
 	 */
 wait_for_iobuf:
+	/**
+	 * 还有没有完成的IO。先等待元数据写入完毕。
+	 */
 	while (commit_transaction->t_iobuf_list != NULL) {
 		struct buffer_head *bh;
 
@@ -547,6 +618,9 @@ wait_for_iobuf:
 		if (cond_resched())
 			goto wait_for_iobuf;
 
+		/**
+		 * 写入失败了，严重的IO错误
+		 */
 		if (unlikely(!buffer_uptodate(bh)))
 			err = -EIO;
 
@@ -591,6 +665,9 @@ wait_for_iobuf:
 
 	/* Here we wait for the revoke record and descriptor record buffers */
  wait_for_ctlbuf:
+ 	/**
+	 * 等待控制块写入完毕。
+	 */
 	while (commit_transaction->t_log_list != NULL) {
 		struct buffer_head *bh;
 
@@ -614,6 +691,10 @@ wait_for_iobuf:
 		/* AKPM: bforget here */
 	}
 
+	/**
+	 * 运行到此，所有数据块已经保存到磁盘中。
+	 * 并且元数据已经保存到日志中。
+	 */
 	jbd_debug(3, "JBD: commit phase 6\n");
 
 	if (is_journal_aborted(journal))
@@ -624,6 +705,10 @@ wait_for_iobuf:
 	 * mode we can now just skip the rest of the journal write
 	 * entirely. */
 
+	/**
+	 * 获得一个日志描述符。
+	 * 该描述符标记事务已经提交。
+	 */
 	descriptor = journal_get_descriptor_buffer(journal);
 	if (!descriptor) {
 		__journal_abort_hard(journal);
@@ -631,6 +716,9 @@ wait_for_iobuf:
 	}
 
 	/* AKPM: buglet - add `i' to tmp! */
+	/**
+	 * 标记描述符，表示它是一个提交描述符。
+	 */
 	for (i = 0; i < jh2bh(descriptor)->b_size; i += 512) {
 		journal_header_t *tmp =
 			(journal_header_t*)jh2bh(descriptor)->b_data;
@@ -650,6 +738,9 @@ wait_for_iobuf:
 			set_buffer_ordered(bh);
 			barrier_done = 1;
 		}
+		/**
+		 * 将提交描述符写入到日志中。
+		 */
 		ret = sync_dirty_buffer(bh);
 		/* is it possible for another commit to fail at roughly
 		 * the same time as this one?  If so, we don't want to
@@ -699,6 +790,10 @@ skip_commit: /* The journal should be unlocked by now. */
 	J_ASSERT(commit_transaction->t_log_list == NULL);
 
 restart_loop:
+	/**
+	 * 当前事务与前面的事务存在一定的关联关系。
+	 * 当前事务的元数据，与前面事务的元数据区相关。
+	 */
 	while (commit_transaction->t_forget) {
 		transaction_t *cp_transaction;
 		struct buffer_head *bh;
@@ -718,6 +813,9 @@ restart_loop:
 		 * data.
 		 *
 		 * Otherwise, we can just throw away the frozen data now.
+		 */
+		/**
+		 * 释放其持有的备份数据。
 		 */
 		if (jh->b_committed_data) {
 			kfree(jh->b_committed_data);
@@ -790,8 +888,14 @@ restart_loop:
 	 */
 	spin_lock(&journal->j_state_lock);
 	spin_lock(&journal->j_list_lock);
+	/**
+	 * 标记当前事务处理完成。
+	 */
 	commit_transaction->t_state = T_FINISHED;
 	J_ASSERT(commit_transaction == journal->j_committing_transaction);
+	/**
+	 * 记录提交点。
+	 */
 	journal->j_commit_sequence = commit_transaction->t_tid;
 	journal->j_committing_transaction = NULL;
 	spin_unlock(&journal->j_state_lock);
