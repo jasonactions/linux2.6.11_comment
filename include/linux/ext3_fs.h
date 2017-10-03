@@ -248,6 +248,10 @@ struct ext3_inode {
 	__le32	i_atime;	/* Access time */
 	__le32	i_ctime;	/* Creation time */
 	__le32	i_mtime;	/* Modification time */
+	/**
+	 * 删除时间。
+	 * 在orphan inode机制中，借用此字段，将orphan inode链接起来。
+	 */
 	__le32	i_dtime;	/* Deletion Time */
 	__le16	i_gid;		/* Low 16 bits of Group Id */
 	__le16	i_links_count;	/* Links count */
@@ -457,6 +461,9 @@ struct ext3_super_block {
 /*D0*/	__u8	s_journal_uuid[16];	/* uuid of journal superblock */
 /*E0*/	__le32	s_journal_inum;		/* inode number of journal file */
 	__le32	s_journal_dev;		/* device number of journal file */
+	/**
+	 * orphan链表头。
+	 */
 	__le32	s_last_orphan;		/* start of list of inodes to delete */
 	__le32	s_hash_seed[4];		/* HTREE hash seed */
 	__u8	s_def_hash_version;	/* Default hash version to use */
@@ -483,6 +490,9 @@ static inline struct ext3_inode_info *EXT3_I(struct inode *inode)
 #define EXT3_SB(sb)	(sb)
 #endif
 
+/**
+ * 获得下一个orphan inode
+ */
 #define NEXT_ORPHAN(inode) EXT3_I(inode)->i_dtime
 
 /*

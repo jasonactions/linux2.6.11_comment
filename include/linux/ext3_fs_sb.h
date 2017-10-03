@@ -67,6 +67,9 @@ struct ext3_sb_info {
 	/* Journaling */
 	struct inode * s_journal_inode;
 	struct journal_s * s_journal;
+	/**
+	 * orphanÁ´±íÍ·¡£
+	 */
 	struct list_head s_orphan;
 	unsigned long s_commit_interval;
 	struct block_device *journal_bdev;

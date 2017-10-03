@@ -94,6 +94,9 @@ struct ext3_inode_info {
 	struct posix_acl	*i_default_acl;
 #endif
 
+	/**
+	 * 通过此字段将inode加入到orphan链表。
+	 */
 	struct list_head i_orphan;	/* unlinked but open inodes */
 
 	/*

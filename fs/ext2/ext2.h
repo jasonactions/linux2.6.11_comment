@@ -19,6 +19,9 @@ struct ext2_inode_info {
 	__u16	i_state;
 	__u32	i_file_acl;
 	__u32	i_dir_acl;
+	/**
+	 * É¾³ýÊ±¼ä¡£
+	 */
 	__u32	i_dtime;
 
 	/*

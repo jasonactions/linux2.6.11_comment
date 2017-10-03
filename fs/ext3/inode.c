@@ -212,6 +212,10 @@ void ext3_delete_inode (struct inode * inode)
 	 * know if ext3_truncate() actually created an orphan record.
 	 * (Well, we could do this if we need to, but heck - it works)
 	 */
+	/**
+	 * 已经没有任何人引用此inode
+	 * 从orphan中彻底删除此节点，回收inode占用的空间。
+	 */
 	ext3_orphan_del(handle, inode);
 	EXT3_I(inode)->i_dtime	= get_seconds();
 

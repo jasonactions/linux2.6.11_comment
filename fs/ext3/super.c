@@ -1093,6 +1093,9 @@ static int ext3_check_descriptors (struct super_block * sb)
  * e2fsck was run on this filesystem, and it must have already done the orphan
  * inode cleanup for us, so we can safely abort without any further action.
  */
+/**
+ * 在mount时调用，用于清理orphan节点，回收空间。
+ */
 static void ext3_orphan_cleanup (struct super_block * sb,
 				 struct ext3_super_block * es)
 {
@@ -1135,23 +1138,35 @@ static void ext3_orphan_cleanup (struct super_block * sb,
 	}
 #endif
 
+	/**
+	 * 循环处理
+	 * 直到没有orphan节点存在。
+	 */
 	while (es->s_last_orphan) {
 		struct inode *inode;
 
+		/**
+		 * 从磁盘上读取下一个orphan节点的信息。
+		 * 如果读取失败，或者没有更多的节点，就退出。
+		 */
 		if (!(inode =
 		      ext3_orphan_get(sb, le32_to_cpu(es->s_last_orphan)))) {
 			es->s_last_orphan = 0;
 			break;
 		}
 
+		/**
+		 * 将节点添加到内存链表中。
+		 */
 		list_add(&EXT3_I(inode)->i_orphan, &EXT3_SB(sb)->s_orphan);
 		DQUOT_INIT(inode);
-		if (inode->i_nlink) {
+		if (inode->i_nlink) {/* 还有硬连接计数? */
 			printk(KERN_DEBUG
 				"%s: truncating inode %ld to %Ld bytes\n",
 				__FUNCTION__, inode->i_ino, inode->i_size);
 			jbd_debug(2, "truncating inode %ld to %Ld bytes\n",
 				  inode->i_ino, inode->i_size);
+			/* 清除磁盘上的索引信息 */
 			ext3_truncate(inode);
 			nr_truncates++;
 		} else {
@@ -1162,6 +1177,11 @@ static void ext3_orphan_cleanup (struct super_block * sb,
 				  inode->i_ino);
 			nr_orphans++;
 		}
+		/**
+		 * 真正神奇的地方在这里。
+		 * iput会真正的调用ext3_orphan_del删除过程
+		 * 将inode信息从磁盘上清除，并且orphan链表信息
+		 */
 		iput(inode);  /* The delete magic happens here! */
 	}
 

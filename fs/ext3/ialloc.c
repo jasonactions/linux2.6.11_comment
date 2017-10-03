@@ -638,6 +638,9 @@ fail2:
 }
 
 /* Verify that we are loading a valid orphan from disk */
+/**
+ * 根据inode编号，从磁盘上将inode信息读入内存。
+ */
 struct inode *ext3_orphan_get(struct super_block *sb, unsigned long ino)
 {
 	unsigned long max_ino = le32_to_cpu(EXT3_SB(sb)->s_es->s_inodes_count);
