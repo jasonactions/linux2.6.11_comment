@@ -126,19 +126,45 @@ typedef struct journal_s	journal_t;	/* Journal control structure */
  * Descriptor block types:
  */
 
+/**
+ * 日志块，其数据来自于文件系统，并且要写回文件系统 
+ * 参见journal_block_tag_s
+ */
 #define JFS_DESCRIPTOR_BLOCK	1
+/**
+ * 提交块 
+ *
+ */
 #define JFS_COMMIT_BLOCK	2
+/** 日志超级块
+ * 参见journal_superblock_s
+ */
 #define JFS_SUPERBLOCK_V1	3
 #define JFS_SUPERBLOCK_V2	4
+/* 撤销块 */
 #define JFS_REVOKE_BLOCK	5
 
 /*
  * Standard header for all descriptor blocks:
  */
+/**
+ * 描述符块的头
+ */
 typedef struct journal_header_s
 {
+	/**
+	 * 描述符的魔术值，如:
+	 *		JFS_MAGIC_NUMBER
+	 */
 	__be32		h_magic;
+	/**
+	 * 描述符块的类型，如:
+	 *		JFS_DESCRIPTOR_BLOCK
+	 */
 	__be32		h_blocktype;
+	/**
+	 * 事务序号
+	 */
 	__be32		h_sequence;
 } journal_header_t;
 
@@ -148,7 +174,13 @@ typedef struct journal_header_s
  */
 typedef struct journal_block_tag_s
 {
+	/**
+	 * 数据在文件系统中的磁盘块号
+	 */
 	__be32		t_blocknr;	/* The on-disk block number */
+	/**
+	 * 标志，如JFS_FLAG_ESCAPE
+	 */
 	__be32		t_flags;	/* See below */
 } journal_block_tag_t;
 
@@ -164,29 +196,47 @@ typedef struct journal_revoke_header_s
 
 
 /* Definitions for the journal tag flags word: */
+/* 数据被转义，写回前需要转回去 */
 #define JFS_FLAG_ESCAPE		1	/* on-disk block is escaped */
+/* 与上一个描述符块的UUID相同 */
 #define JFS_FLAG_SAME_UUID	2	/* block has same uuid as previous */
+/* 未用 */
 #define JFS_FLAG_DELETED	4	/* block deleted by this transaction */
+/* 结束符，表示一个事务的结束 */
 #define JFS_FLAG_LAST_TAG	8	/* last tag in this descriptor block */
 
 
 /*
  * The journal superblock.  All fields are in big-endian byte order.
  */
+/**
+ * 日志超级块描述符
+ */
 typedef struct journal_superblock_s
 {
 /* 0x0000 */
+	/**
+	 * 日志块描述，应该用超级块的描述块
+	 */
 	journal_header_t s_header;
 
 /* 0x000C */
 	/* Static information describing the journal */
+	/* 日志设备的块大小 */
 	__be32	s_blocksize;		/* journal device blocksize */
+	/* 日志总块数 */
 	__be32	s_maxlen;		/* total blocks in journal file */
+	/**
+	 * 日志块的第一个块号 
+	 * 初始为1
+	 */
 	__be32	s_first;		/* first block of log information */
 
 /* 0x0018 */
 	/* Dynamic information describing the current state of the log */
+	/* 最老的事务编号 */
 	__be32	s_sequence;		/* first commit ID expected in log */
+	/* 日志开始的块号，为0表示日志为空 */
 	__be32	s_start;		/* blocknr of start of log */
 
 /* 0x0020 */
@@ -371,16 +421,28 @@ struct jbd_revoke_table_s;
 /* Docbook can't yet cope with the bit fields, but will leave the documentation
  * in so it can be fixed later. 
  */
-
+/**
+ * 代表JBD中一个原子操作
+ * 可以包含多个磁盘块
+ */
 struct handle_s 
 {
 	/* Which compound transaction is this update a part of? */
+	/**
+	 * 本原子操作属于哪个事务
+	 */
 	transaction_t		*h_transaction;
 
 	/* Number of remaining buffers we are allowed to dirty: */
+	/**
+	 * 本原子操作可用的额度，也就是还可以用多少个磁盘块
+	 */
 	int			h_buffer_credits;
 
 	/* Reference count on this handle */
+	/**
+	 * 引用计数
+	 */
 	int			h_ref;
 
 	/* Field for caller's use to track errors through large fs */
@@ -388,6 +450,9 @@ struct handle_s
 	int			h_err;
 
 	/* Flags [no locking] */
+	/**
+	 * 处理完原子操作后，立即提交事务
+	 */
 	unsigned int	h_sync:		1;	/* sync-on-close */
 	unsigned int	h_jdata:	1;	/* force data journaling */
 	unsigned int	h_aborted:	1;	/* fatal error on handle */
@@ -429,13 +494,21 @@ struct handle_s
  *    ->j_list_lock			(journal_unmap_buffer)
  *
  */
-
+/**
+ * 一个完整的事务，可以包含多个原子操作。
+ */
 struct transaction_s 
 {
 	/* Pointer to the journal for this transaction. [no locking] */
+	/**
+	 * 所属的日志
+	 */
 	journal_t		*t_journal;
 
 	/* Sequence number for this transaction [no locking] */
+	/**
+	 * 本事务的序号
+	 */
 	tid_t			t_tid;
 
 	/*
@@ -443,6 +516,9 @@ struct transaction_s
 	 * [no locking - only kjournald alters this]
 	 * FIXME: needs barriers
 	 * KLUDGE: [use j_state_lock]
+	 */
+	/**
+	 * 事务当前的状态
 	 */
 	enum {
 		/*
@@ -469,20 +545,35 @@ struct transaction_s
 	/*
 	 * Where in the log does this transaction's commit start? [no locking]
 	 */
+	/**
+	 * 本事务从日志的哪一个块开始
+	 */
 	unsigned long		t_log_start;
 
 	/* Number of buffers on the t_buffers list [j_list_lock] */
+	/**
+	 * 本事务中缓冲区的个数
+	 */
 	int			t_nr_buffers;
 
 	/*
 	 * Doubly-linked circular list of all buffers reserved but not yet
 	 * modified by this transaction [j_list_lock]
 	 */
+	/**
+	 * 被事务所保留，但是没有使用的缓冲区
+	 * 在提交事务前被释放
+	 */
 	struct journal_head	*t_reserved_list;
 
 	/*
 	 * Doubly-linked circular list of all buffers under writeout during
 	 * commit [j_list_lock]
+	 */
+	/**
+	 * 被锁住的缓冲区
+	 * 这些缓冲区在文件系统中被暂缓提交
+	 * 直到日志被提交后才提交。
 	 */
 	struct journal_head	*t_locked_list;
 
@@ -520,6 +611,9 @@ struct transaction_s
 	 * Doubly-linked circular list of all buffers still to be flushed before
 	 * this transaction can be checkpointed. [j_list_lock]
 	 */
+	/**
+	 * 在checkpoint时，已经提交进行IO的缓冲区链表
+	 */
 	struct journal_head	*t_checkpoint_list;
 
 	/*
@@ -537,6 +631,11 @@ struct transaction_s
 	 * IO.  The IO buffers on the iobuf list and the shadow buffers on this
 	 * list match each other one for one at all times. [j_list_lock]
 	 */
+	/**
+	 * 与t_iobuf_list一起构成了元数据链表
+	 * 这些缓冲区都会被写入日志
+	 * 处理转义??
+	 */
 	struct journal_head	*t_shadow_list;
 
 	/*
@@ -552,11 +651,19 @@ struct transaction_s
 	/*
 	 * Protects info related to handles
 	 */
+	/**
+	 * 保护原子操作的锁
+	 */
 	spinlock_t		t_handle_lock;
 
 	/*
 	 * Number of outstanding updates running on this transaction
 	 * [t_handle_lock]
+	 */
+	/**
+	 * 正在使用本事务的原子操作数量
+	 * 在提交前，需要等待其值为0，表示没有原子操作向它提交请求。
+	 * 在journal_start时加1，journal_stop减1
 	 */
 	int			t_updates;
 
@@ -564,11 +671,18 @@ struct transaction_s
 	 * Number of buffers reserved for use by all handles in this transaction
 	 * handle but not yet modified. [t_handle_lock]
 	 */
+	/**
+	 * 保留给原子操作使用，但是还没有被使用的缓冲区额度
+	 */
 	int			t_outstanding_credits;
 
 	/*
 	 * Forward and backward links for the circular list of all transactions
 	 * awaiting checkpoint. [j_list_lock]
+	 */
+	/**
+	 * 通过这两个指针
+	 * 将事务链接到checkpoint队列中
 	 */
 	transaction_t		*t_cpnext, *t_cpprev;
 
@@ -580,6 +694,9 @@ struct transaction_s
 
 	/*
 	 * How many handles used this transaction? [t_handle_lock]
+	 */
+	/**
+	 * 本事务中包含了多少个原子操作
 	 */
 	int t_handle_count;
 
@@ -639,10 +756,13 @@ struct transaction_s
  * @j_revoke: The revoke table - maintains the list of revoked blocks in the
  *     current transaction.
  */
-
+/**
+ * 日志描述符
+ */
 struct journal_s
 {
 	/* General journaling state flags [j_state_lock] */
+	/* 日志的状态标志*/
 	unsigned long		j_flags;
 
 	/*
@@ -652,6 +772,7 @@ struct journal_s
 	int			j_errno;
 
 	/* The superblock buffer */
+	/* 日志的超级块缓冲区 */
 	struct buffer_head	*j_sb_buffer;
 	journal_superblock_t	*j_superblock;
 
@@ -665,6 +786,9 @@ struct journal_s
 
 	/*
 	 * Number of processes waiting to create a barrier lock [j_state_lock]
+	 */
+	/**
+	 * 等待创建屏障的任务数
 	 */
 	int			j_barrier_count;
 
@@ -694,6 +818,9 @@ struct journal_s
 	 * ... and a linked circular list of all transactions waiting for
 	 * checkpointing. [j_list_lock]
 	 */
+	/**
+	 * 等待checkpoint的事务链表头
+	 */
 	transaction_t		*j_checkpoint_transactions;
 
 	/*
@@ -718,11 +845,15 @@ struct journal_s
 	wait_queue_head_t	j_wait_updates;
 
 	/* Semaphore for locking against concurrent checkpoints */
+	/* 保护checkpoint链表的互斥锁 */
 	struct semaphore 	j_checkpoint_sem;
 
 	/*
 	 * Journal head: identifies the first unused block in the journal.
 	 * [j_state_lock]
+	 */
+	/**
+	 *  第一个未使用的日志块
 	 */
 	unsigned long		j_head;
 
@@ -730,17 +861,26 @@ struct journal_s
 	 * Journal tail: identifies the oldest still-used block in the journal.
 	 * [j_state_lock]
 	 */
+	/**
+	 * 最后一个仍然在使用的日志块
+	 */
 	unsigned long		j_tail;
 
 	/*
 	 * Journal free: how many free blocks are there in the journal?
 	 * [j_state_lock]
 	 */
+	/**
+	 * 日志中剩余的空闲块，为0表示已经满了
+	 */
 	unsigned long		j_free;
 
 	/*
 	 * Journal start and end: the block numbers of the first usable block
 	 * and one beyond the last usable block in the journal. [j_state_lock]
+	 */
+	/**
+	 * 格式化时，确定的起始结束块号
 	 */
 	unsigned long		j_first;
 	unsigned long		j_last;
@@ -749,8 +889,12 @@ struct journal_s
 	 * Device, blocksize and starting block offset for the location where we
 	 * store the journal.
 	 */
+	/**
+	 * 日志块设备
+	 */
 	struct block_device	*j_dev;
 	int			j_blocksize;
+	/* 日志在块设备中偏移量 */
 	unsigned int		j_blk_offset;
 
 	/*
@@ -760,6 +904,9 @@ struct journal_s
 	struct block_device	*j_fs_dev;
 
 	/* Total maximum capacity of the journal region on disk. */
+	/**
+	 * 日志在磁盘中的最大容量
+	 */
 	unsigned int		j_maxlen;
 
 	/*
@@ -775,23 +922,27 @@ struct journal_s
 	/*
 	 * Sequence number of the oldest transaction in the log [j_state_lock]
 	 */
+	/* 日志中最老的事务编号 */
 	tid_t			j_tail_sequence;
 
 	/*
 	 * Sequence number of the next transaction to grant [j_state_lock]
 	 */
+	/* 下一个事务的编号 */
 	tid_t			j_transaction_sequence;
 
 	/*
 	 * Sequence number of the most recently committed transaction
 	 * [j_state_lock].
 	 */
+	/* 最近提交的事务编号 */
 	tid_t			j_commit_sequence;
 
 	/*
 	 * Sequence number of the most recent transaction wanting commit
 	 * [j_state_lock]
 	 */
+	/* 最近想提交的事务编号 */
 	tid_t			j_commit_request;
 
 	/*
@@ -803,12 +954,14 @@ struct journal_s
 	__u8			j_uuid[16];
 
 	/* Pointer to the current commit thread for this journal */
+	/* 日志线程 */
 	struct task_struct	*j_task;
 
 	/*
 	 * Maximum number of metadata buffers to allow in a single compound
 	 * commit transaction
 	 */
+	/* 一次允许提交的日志缓冲区个数 */
 	int			j_max_transaction_buffers;
 
 	/*
@@ -817,20 +970,25 @@ struct journal_s
 	unsigned long		j_commit_interval;
 
 	/* The timer used to wakeup the commit thread: */
+	/* 定期唤醒线程的定时器 */
 	struct timer_list	*j_commit_timer;
 
 	/*
 	 * The revoke table: maintains the list of revoked blocks in the
 	 * current transaction.  [j_revoke_lock]
 	 */
+	/* 保护撤销块的锁 */
 	spinlock_t		j_revoke_lock;
+	/* 正在使用的撤销哈希表 */
 	struct jbd_revoke_table_s *j_revoke;
+	/* 两个撤销表，一个备用，一个正在用 */
 	struct jbd_revoke_table_s *j_revoke_table[2];
 
 	/*
 	 * An opaque pointer to fs-private information.  ext3 puts its
 	 * superblock pointer here
 	 */
+	/* 对ext3来说，指向其超级块 */
 	void *j_private;
 };
 

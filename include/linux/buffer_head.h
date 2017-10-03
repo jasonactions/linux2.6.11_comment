@@ -89,6 +89,7 @@ typedef void (bh_end_io_t)(struct buffer_head *bh, int uptodate);
  */
 /**
  * 缓冲区首部结构
+ * 对应一个磁盘块的内容
  */
 struct buffer_head {
 	/* First cache line: */
