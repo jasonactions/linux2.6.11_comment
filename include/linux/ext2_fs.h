@@ -56,6 +56,9 @@
 /*
  * Special inode numbers
  */
+/**
+ * 保留的inode号
+ */
 #define	EXT2_BAD_INO		 1	/* Bad blocks inode */
 #define EXT2_ROOT_INO		 2	/* Root inode */
 #define EXT2_BOOT_LOADER_INO	 5	/* Boot loader inode */
@@ -201,21 +204,56 @@ struct ext2_group_desc
 /*
  * Inode flags
  */
+/**
+ * 安全删除。
+ * 在删除文件时，将其数据块中写入随机数。
+ */
 #define	EXT2_SECRM_FL			0x00000001 /* Secure deletion */
+/**
+ * 在删除文件时，并不真的删除，而是放到临时位置。
+ */
 #define	EXT2_UNRM_FL			0x00000002 /* Undelete */
+/**
+ * 文件被压缩存储。
+ */
 #define	EXT2_COMPR_FL			0x00000004 /* Compress file */
+/**
+ * 同步更新磁盘。用于重要的数据文件。
+ */
 #define EXT2_SYNC_FL			0x00000008 /* Synchronous updates */
+/**
+ * 不能被移动位置。
+ * 在反碎片整理时，也不能移动它的位置。
+ * 主要用于启动文件。
+ */
 #define EXT2_IMMUTABLE_FL		0x00000010 /* Immutable file */
+/**
+ * 只能添加而不能修改现有文件的内容。
+ */
 #define EXT2_APPEND_FL			0x00000020 /* writes to file may only append */
+/**
+ * No dump/delete
+ * 即使link count == 0，也不真正删除文件。
+ */
 #define EXT2_NODUMP_FL			0x00000040 /* do not dump file */
+/**
+ * 不修改文件访问时间。
+ * 与作者声称的相反，这个位并不是为了安全，而是性能。
+ */
 #define EXT2_NOATIME_FL			0x00000080 /* do not update atime */
 /* Reserved for compression usage... */
 #define EXT2_DIRTY_FL			0x00000100
+/**
+ * 存在压缩块，似乎未用。
+ */
 #define EXT2_COMPRBLK_FL		0x00000200 /* One or more compressed clusters */
 #define EXT2_NOCOMP_FL			0x00000400 /* Don't compress */
 #define EXT2_ECOMPR_FL			0x00000800 /* Compression error */
 /* End compression flags --- maybe not all used */	
 #define EXT2_BTREE_FL			0x00001000 /* btree format dir */
+/**
+ * 使用了目录索引。
+ */
 #define EXT2_INDEX_FL			0x00001000 /* hash-indexed directory */
 #define EXT2_IMAGIC_FL			0x00002000 /* AFS directory */
 #define EXT2_JOURNAL_DATA_FL		0x00004000 /* Reserved for ext3 */
@@ -288,6 +326,7 @@ struct ext2_inode {
 	__le16	i_links_count;	/* Links count */
 	/**
 	 * 文件的数据块数。以512B为单位
+	 * 包含已经用数量，以及保留数量。
 	 */
 	__le32	i_blocks;	/* Blocks count */
 	/**
@@ -301,6 +340,9 @@ struct ext2_inode {
 		struct {
 			__le32  l_i_reserved1;
 		} linux1;
+		/**
+		 * 仅仅HURD使用了此保留值。
+		 */
 		struct {
 			__le32  h_i_translator;
 		} hurd1;
@@ -310,6 +352,10 @@ struct ext2_inode {
 	} osd1;				/* OS dependent 1 */
 	/**
 	 * 指向数据块的指针。
+	 * 前12个块是直接数据块。
+	 * 第13块是一级间接块号。
+	 * 14->二级间接块。
+	 * 15->三级间接块。
 	 */
 	__le32	i_block[EXT2_N_BLOCKS];/* Pointers to blocks */
 	/**
@@ -325,7 +371,7 @@ struct ext2_inode {
 	 */
 	__le32	i_dir_acl;	/* Directory ACL */
 	/**
-	 * 片的地址。
+	 * 最后一个文件片的地址。
 	 */
 	__le32	i_faddr;	/* Fragment address */
 	/**
@@ -424,8 +470,17 @@ struct ext2_inode {
 /*
  * Behaviour when detecting errors
  */
+/**
+ * 当出现错误时，忽略错误
+ */
 #define EXT2_ERRORS_CONTINUE		1	/* Continue execution */
+/**
+ * 当出现错误时，只能以只读方式mount
+ */
 #define EXT2_ERRORS_RO			2	/* Remount fs read-only */
+/**
+ *  当出现错误时，系统停止
+ */
 #define EXT2_ERRORS_PANIC		3	/* Panic */
 #define EXT2_ERRORS_DEFAULT		EXT2_ERRORS_CONTINUE
 
@@ -748,6 +803,7 @@ struct ext2_dir_entry_2 {
 	__le32	inode;			/* Inode number */
 	/**
 	 * 目录项长度。也可以解释成一个指针。
+	 * 为了性能优化，某些实现可能将此字段补齐。
 	 */
 	__le16	rec_len;		/* Directory entry length */
 	/**

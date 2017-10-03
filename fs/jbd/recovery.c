@@ -37,6 +37,14 @@ struct recovery_info
 	int		nr_revoke_hits;
 };
 
+/**
+ * PASS_SCAN:
+ *	查找到日志末端。
+ * PASS_REVOKE:
+ *	查找日志中所有撤销块。
+ * PASS_REPLAY:
+ *	将所有未被撤销的块写入到磁盘，以确保一致性。
+ */
 enum passtype {PASS_SCAN, PASS_REVOKE, PASS_REPLAY};
 static int do_one_pass(journal_t *journal,
 				struct recovery_info *info, enum passtype pass);
