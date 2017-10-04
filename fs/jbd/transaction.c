@@ -261,27 +261,40 @@ static handle_t *new_handle(int nblocks)
  */
 /**
  * 开始一个日志操作
+ * 获得原子操作描述符，如果已经有一个，则直接返回。
+ * 如果没有事务，则创建一个。
+ * nblocks是预期 要修改的缓冲区个数。
  */
 handle_t *journal_start(journal_t *journal, int nblocks)
 {
+	/* 获得当前任务的原子操作 */
 	handle_t *handle = journal_current_handle();
 	int err;
 
+	/* 没有日志支持，只读文件系统 */
 	if (!journal)
 		return ERR_PTR(-EROFS);
 
+	/* 已经存在原子操作了 */
 	if (handle) {
 		J_ASSERT(handle->h_transaction->t_journal == journal);
+		/* 添加原子操作的引用计数，然后返回 */
 		handle->h_ref++;
 		return handle;
 	}
 
+	/* 否则创建一个新原子操作 */
 	handle = new_handle(nblocks);
 	if (!handle)
 		return ERR_PTR(-ENOMEM);
 
+	/* 设置当前任务的原子上下文 */
 	current->journal_info = handle;
 
+	/**
+	 * 在当前运行的事务中，启动一个新原子操作。
+	 * 如果没有运行的事务，或者事务过大，则新创建一个。
+	 */
 	err = start_this_handle(journal, handle);
 	if (err < 0) {
 		jbd_free_handle(handle);
@@ -311,6 +324,9 @@ handle_t *journal_start(journal_t *journal, int nblocks)
  * return code < 0 implies an error
  * return code > 0 implies normal transaction-full status.
  */
+/**
+ * 扩展原子操作的额度
+ */
 int journal_extend(handle_t *handle, int nblocks)
 {
 	transaction_t *transaction = handle->h_transaction;
@@ -336,18 +352,25 @@ int journal_extend(handle_t *handle, int nblocks)
 	spin_lock(&transaction->t_handle_lock);
 	wanted = transaction->t_outstanding_credits + nblocks;
 
+	/**
+	 * 申请的空间过大
+	 */
 	if (wanted > journal->j_max_transaction_buffers) {
 		jbd_debug(3, "denied handle %p %d blocks: "
 			  "transaction too large\n", handle, nblocks);
 		goto unlock;
 	}
 
+	/**
+	 * 没有足够多的日志空间了
+	 */
 	if (wanted > __log_space_left(journal)) {
 		jbd_debug(3, "denied handle %p %d blocks: "
 			  "insufficient log space\n", handle, nblocks);
 		goto unlock;
 	}
 
+	/* 增加其额度 */
 	handle->h_buffer_credits += nblocks;
 	transaction->t_outstanding_credits += nblocks;
 	result = 0;
@@ -564,12 +587,12 @@ repeat:
 	 * ie. locked but not dirty) or tune2fs (which may actually have
 	 * the buffer dirtied, ugh.)  */
 
-	if (buffer_dirty(bh)) {
+	if (buffer_dirty(bh)) {/* 缓冲区脏 */
 		/*
 		 * First question: is this buffer already part of the current
 		 * transaction or the existing committing transaction?
 		 */
-		if (jh->b_transaction) {
+		if (jh->b_transaction) {/* 缓冲区与事务已经绑定 */
 			J_ASSERT_JH(jh,
 				jh->b_transaction == transaction || 
 				jh->b_transaction ==
@@ -577,6 +600,7 @@ repeat:
 			if (jh->b_next_transaction)
 				J_ASSERT_JH(jh, jh->b_next_transaction ==
 							transaction);
+			/* 不合理的状态，应该由JBD来管理脏状态 */
 			JBUFFER_TRACE(jh, "Unexpected dirty buffer");
 			jbd_unexpected_dirty_buffer(jh);
  		}
@@ -595,7 +619,7 @@ repeat:
 	 * The buffer is already part of this transaction if b_transaction or
 	 * b_next_transaction points to it
 	 */
-	if (jh->b_transaction == transaction ||
+	if (jh->b_transaction == transaction ||/* 当前事务已经在管理此缓冲区了，退出 */
 	    jh->b_next_transaction == transaction)
 		goto done;
 
@@ -603,12 +627,15 @@ repeat:
 	 * If there is already a copy-out version of this buffer, then we don't
 	 * need to make another one
 	 */
-	if (jh->b_frozen_data) {
+	/* 运行到这里，说明本事务没有管理该缓冲区 */
+	if (jh->b_frozen_data) {/* 已经复制过一份数据 */
 		JBUFFER_TRACE(jh, "has frozen data");
 		J_ASSERT_JH(jh, jh->b_next_transaction == NULL);
+		/* 接着上一个日志进行处理 */
 		jh->b_next_transaction = transaction;
 
 		J_ASSERT_JH(jh, handle->h_buffer_credits > 0);
+		/* 减少日志配额 */
 		handle->h_buffer_credits--;
 		if (credits)
 			(*credits)++;
@@ -617,8 +644,10 @@ repeat:
 
 	/* Is there data here we need to preserve? */
 
+	/* 其他事务在处理该缓冲区 */
 	if (jh->b_transaction && jh->b_transaction != transaction) {
 		JBUFFER_TRACE(jh, "owned by older transaction");
+		/* 上一个事务必然在提交过程中 */
 		J_ASSERT_JH(jh, jh->b_next_transaction == NULL);
 		J_ASSERT_JH(jh, jh->b_transaction ==
 					journal->j_committing_transaction);
@@ -632,6 +661,7 @@ repeat:
 		 * journaled.  If the primary copy is already going to
 		 * disk then we cannot do copy-out here. */
 
+		/* 上一个事务在使用主缓冲区 */
 		if (jh->b_jlist == BJ_Shadow) {
 			DEFINE_WAIT_BIT(wait, &bh->b_state, BH_Unshadow);
 			wait_queue_head_t *wqh;
@@ -641,6 +671,7 @@ repeat:
 			JBUFFER_TRACE(jh, "on shadow: sleep");
 			jbd_unlock_bh_state(bh);
 			/* commit wakes up all shadow buffers after IO */
+			/* 等待上一个事务解除对主缓冲区的引用 */
 			for ( ; ; ) {
 				prepare_to_wait(wqh, &wait.wait,
 						TASK_UNINTERRUPTIBLE);
@@ -666,9 +697,9 @@ repeat:
 		 * transaction, so we HAVE to force the frozen_data copy
 		 * in that case. */
 
-		if (jh->b_jlist != BJ_Forget || force_copy) {
+		if (jh->b_jlist != BJ_Forget || force_copy) {/* 上一个事务持有此缓冲区 */
 			JBUFFER_TRACE(jh, "generate frozen data");
-			if (!frozen_buffer) {
+			if (!frozen_buffer) { /* 需要进行复制，因此需要先分配内存 */
 				JBUFFER_TRACE(jh, "allocate memory for buffer");
 				jbd_unlock_bh_state(bh);
 				frozen_buffer = jbd_kmalloc(jh2bh(jh)->b_size,
@@ -684,6 +715,7 @@ repeat:
 				}
 				goto repeat;
 			}
+			/* 记录下备份数据 */
 			jh->b_frozen_data = frozen_buffer;
 			frozen_buffer = NULL;
 			need_copy = 1;
@@ -692,6 +724,7 @@ repeat:
 	}
 
 	J_ASSERT(handle->h_buffer_credits > 0);
+	/* 减少额度计数 */
 	handle->h_buffer_credits--;
 	if (credits)
 		(*credits)++;
@@ -707,6 +740,7 @@ repeat:
 		jh->b_transaction = transaction;
 		JBUFFER_TRACE(jh, "file as BJ_Reserved");
 		spin_lock(&journal->j_list_lock);
+		/* 将缓冲区添加到保留链表中 */
 		__journal_file_buffer(jh, transaction, BJ_Reserved);
 		spin_unlock(&journal->j_list_lock);
 	}
@@ -722,6 +756,7 @@ done:
 		page = jh2bh(jh)->b_page;
 		offset = ((unsigned long) jh2bh(jh)->b_data) & ~PAGE_MASK;
 		source = kmap_atomic(page, KM_USER0);
+		/* 将源缓冲区的数据复制过来 */
 		memcpy(jh->b_frozen_data, source+offset, jh2bh(jh)->b_size);
 		kunmap_atomic(source, KM_USER0);
 	}
@@ -752,15 +787,21 @@ out:
  * because we're write()ing a buffer which is also part of a shared mapping.
  */
 
+/**
+ * journal_get_write_access,journal_get_create_access,journal_get_undo_access
+ * 这三个函数都获得缓冲区的写权限
+ */
 int journal_get_write_access(handle_t *handle,
 			struct buffer_head *bh, int *credits)
 {
+	/* 将缓冲区与JBD绑定 */
 	struct journal_head *jh = journal_add_journal_head(bh);
 	int rc;
 
 	/* We do not want to get caught playing with fields which the
 	 * log thread also manipulates.  Make sure that the buffer
 	 * completes any outstanding IO before proceeding. */
+	/* 将缓冲区加入到事务的队列中 */
 	rc = do_get_write_access(handle, jh, 0, credits);
 	journal_put_journal_head(jh);
 	return rc;
@@ -786,10 +827,14 @@ int journal_get_write_access(handle_t *handle,
  *
  * Call this if you create a new bh.
  */
+/**
+ * 创建新的缓冲区，并将其放到事务中管理
+ */
 int journal_get_create_access(handle_t *handle, struct buffer_head *bh) 
 {
 	transaction_t *transaction = handle->h_transaction;
 	journal_t *journal = transaction->t_journal;
+	/* 将缓冲区与JBD关联起来 */
 	struct journal_head *jh = journal_add_journal_head(bh);
 	int err;
 
@@ -820,12 +865,18 @@ int journal_get_create_access(handle_t *handle, struct buffer_head *bh)
 	J_ASSERT_JH(jh, handle->h_buffer_credits > 0);
 	handle->h_buffer_credits--;
 
+	/* 在这之前，缓冲区没有与日志关联 */
 	if (jh->b_transaction == NULL) {
 		jh->b_transaction = transaction;
 		JBUFFER_TRACE(jh, "file as BJ_Reserved");
+		/* 将缓冲区加入到事务的保留缓冲区 */
 		__journal_file_buffer(jh, transaction, BJ_Reserved);
+	/* 当前正在提交的事务，其缓冲区被修改 */
 	} else if (jh->b_transaction == journal->j_committing_transaction) {
 		JBUFFER_TRACE(jh, "set next transaction");
+		/**
+		 * 表明当前事务希望接着修改此缓冲区。
+		 */
 		jh->b_next_transaction = transaction;
 	}
 	spin_unlock(&journal->j_list_lock);
@@ -839,6 +890,9 @@ int journal_get_create_access(handle_t *handle, struct buffer_head *bh)
 	 * which hits an assertion error.
 	 */
 	JBUFFER_TRACE(jh, "cancelling revoke");
+	/**
+	 * 该缓冲区明显是需要被继续使用了，应当从撤销表中取消
+	 */
 	journal_cancel_revoke(handle, jh);
 	journal_put_journal_head(jh);
 out:
@@ -872,6 +926,10 @@ out:
  *
  * Returns error number or 0 on success.
  */
+/**
+ * 获得不可回退权限
+ * 位图元数据时使用，只要位图块还没有提交，它释放的位就不能被分配
+ */
 int journal_get_undo_access(handle_t *handle, struct buffer_head *bh,
 				int *credits)
 {
@@ -885,6 +943,10 @@ int journal_get_undo_access(handle_t *handle, struct buffer_head *bh,
 	 * Do this first --- it can drop the journal lock, so we want to
 	 * make sure that obtaining the committed_data is done
 	 * atomically wrt. completion of any outstanding commits.
+	 */
+	/**
+	 * 这里传入1，表示需要强制复制一份源数据
+	 * 需要在源数据上进行分配，而不能依赖于事务里面所释放的块
 	 */
 	err = do_get_write_access(handle, jh, 1, credits);
 	if (err)
@@ -913,6 +975,10 @@ repeat:
 
 		jh->b_committed_data = committed_data;
 		committed_data = NULL;
+		/**
+		 * 注意这里没有用kmap，而是直接复制。
+		 * why?
+		 */
 		memcpy(jh->b_committed_data, bh->b_data, bh->b_size);
 	}
 	jbd_unlock_bh_state(bh);
@@ -938,6 +1004,10 @@ out:
  * journal_dirty_data() can be called via page_launder->ext3_writepage
  * by kswapd.
  */
+/**
+ * 通知JBD，相应的磁盘缓冲区已经修改完毕
+ * 这是针对数据块来说的
+ */
 int journal_dirty_data(handle_t *handle, struct buffer_head *bh)
 {
 	journal_t *journal = handle->h_transaction->t_journal;
@@ -947,6 +1017,7 @@ int journal_dirty_data(handle_t *handle, struct buffer_head *bh)
 	if (is_handle_aborted(handle))
 		return 0;
 
+	/* 取得缓冲区关联的日志描述符 */
 	jh = journal_add_journal_head(bh);
 	JBUFFER_TRACE(jh, "entry");
 
@@ -979,9 +1050,9 @@ int journal_dirty_data(handle_t *handle, struct buffer_head *bh)
 	 */
 	jbd_lock_bh_state(bh);
 	spin_lock(&journal->j_list_lock);
-	if (jh->b_transaction) {
+	if (jh->b_transaction) {/* 块已经由某个事务管理了 */
 		JBUFFER_TRACE(jh, "has transaction");
-		if (jh->b_transaction != handle->h_transaction) {
+		if (jh->b_transaction != handle->h_transaction) {/* 不是当前事务在管理 */
 			JBUFFER_TRACE(jh, "belongs to older transaction");
 			J_ASSERT_JH(jh, jh->b_transaction ==
 					journal->j_committing_transaction);
@@ -1019,6 +1090,10 @@ int journal_dirty_data(handle_t *handle, struct buffer_head *bh)
 			 * is written into the filesystem, recovery will replay
 			 * the write() data.
 			 */
+			/**
+			 * 只有在这三个队列中，才表示前一个事务真正了该缓冲区
+			 * 否则表示不受其管理。
+			 */
 			if (jh->b_jlist != BJ_None &&
 					jh->b_jlist != BJ_SyncData &&
 					jh->b_jlist != BJ_Locked) {
@@ -1032,12 +1107,15 @@ int journal_dirty_data(handle_t *handle, struct buffer_head *bh)
 			 * again because that can cause the write-out loop in
 			 * commit to never terminate.
 			 */
-			if (buffer_dirty(bh)) {
+			if (buffer_dirty(bh)) {/* 如果已经为脏 */
 				get_bh(bh);
+				/* 先释放锁 */
 				spin_unlock(&journal->j_list_lock);
 				jbd_unlock_bh_state(bh);
 				need_brelse = 1;
+				/* 同步脏数据到磁盘 */
 				sync_dirty_buffer(bh);
+				/* 重新获得锁 */
 				jbd_lock_bh_state(bh);
 				spin_lock(&journal->j_list_lock);
 				/* The buffer may become locked again at any
@@ -1047,6 +1125,7 @@ int journal_dirty_data(handle_t *handle, struct buffer_head *bh)
 			/* journal_clean_data_list() may have got there first */
 			if (jh->b_transaction != NULL) {
 				JBUFFER_TRACE(jh, "unfile from commit");
+				/* 将它从原事务的链表中删除 */
 				__journal_unfile_buffer(jh);
 			}
 			/* The buffer will be refiled below */
@@ -1063,11 +1142,13 @@ int journal_dirty_data(handle_t *handle, struct buffer_head *bh)
 			J_ASSERT_JH(jh, jh->b_jlist != BJ_Shadow);
 			__journal_unfile_buffer(jh);
 			JBUFFER_TRACE(jh, "file as data");
+			/* 数据脏，将其链接到SyncData链表，表示是Data数据 */
 			__journal_file_buffer(jh, handle->h_transaction,
 						BJ_SyncData);
 		}
 	} else {
 		JBUFFER_TRACE(jh, "not on a transaction");
+		/* 直接加到本事务的SyncData */
 		__journal_file_buffer(jh, handle->h_transaction, BJ_SyncData);
 	}
 no_journal:
@@ -1101,6 +1182,9 @@ no_journal:
  * buffer: that only gets done when the old transaction finally
  * completes its commit.
  */
+/**
+ * 通知JBD，元数据缓冲区已经修改完成
+ */
 int journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 {
 	transaction_t *transaction = handle->h_transaction;
@@ -1121,6 +1205,9 @@ int journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 	 * I _think_ we're OK here with SMP barriers - a mistaken decision will
 	 * result in this test being false, so we go in and take the locks.
 	 */
+	/**
+	 * 已经在当前事务的元数据队列中了
+	 */
 	if (jh->b_transaction == transaction && jh->b_jlist == BJ_Metadata) {
 		JBUFFER_TRACE(jh, "fastpath");
 		J_ASSERT_JH(jh, jh->b_transaction ==
@@ -1136,10 +1223,17 @@ int journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 	 * be committing, and will be refiled once the commit completes:
 	 * leave it alone for now. 
 	 */
+	/**
+	 * 该缓冲区正在提交事务里
+	 */
 	if (jh->b_transaction != transaction) {
 		JBUFFER_TRACE(jh, "already on other transaction");
 		J_ASSERT_JH(jh, jh->b_transaction ==
 					journal->j_committing_transaction);
+		/**
+		 * 上一个事务处理完后
+		 * 本事务会接着处理元数据
+		 */
 		J_ASSERT_JH(jh, jh->b_next_transaction == transaction);
 		/* And this case is illegal: we can't reuse another
 		 * transaction's data buffer, ever. */
@@ -1151,6 +1245,10 @@ int journal_dirty_metadata(handle_t *handle, struct buffer_head *bh)
 
 	JBUFFER_TRACE(jh, "file as BJ_Metadata");
 	spin_lock(&journal->j_list_lock);
+	/**
+	 * 可能会将缓冲区从保留队列中摘除
+	 * 然后加到元数据队列
+	 */
 	__journal_file_buffer(jh, handle->h_transaction, BJ_Metadata);
 	spin_unlock(&journal->j_list_lock);
 out_unlock_bh:
@@ -1201,6 +1299,12 @@ journal_release_buffer(handle_t *handle, struct buffer_head *bh, int credits)
  * Allow this call even if the handle has aborted --- it may be part of
  * the caller's cleanup after an abort.
  */
+/**
+ * 当原子操作失败时，将已经加入到队列中缓冲区忘记掉
+ * 这是针对数据块来说的。
+ * 元数据缓冲区应当调用journal_revoke。
+ * 元数据缓冲区也会调用到这里。
+ */
 int journal_forget (handle_t *handle, struct buffer_head *bh)
 {
 	transaction_t *transaction = handle->h_transaction;
@@ -1225,6 +1329,9 @@ int journal_forget (handle_t *handle, struct buffer_head *bh)
 		goto not_jbd;
 	}
 
+	/**
+	 * 该缓冲区属于当前事务
+	 */
 	if (jh->b_transaction == handle->h_transaction) {
 		J_ASSERT_JH(jh, !jh->b_frozen_data);
 
@@ -1236,6 +1343,7 @@ int journal_forget (handle_t *handle, struct buffer_head *bh)
 
 		JBUFFER_TRACE(jh, "belongs to current transaction: unfile");
 
+		/* 从本事务的队列中删除 */
 		__journal_unfile_buffer(jh);
 
 		/* 
@@ -1250,9 +1358,19 @@ int journal_forget (handle_t *handle, struct buffer_head *bh)
 		 * we know to remove the checkpoint after we commit. 
 		 */
 
+		/**
+		 * 当前缓冲区正处于checkpoint队列中
+		 */
 		if (jh->b_cp_transaction) {
+			/**
+			 * 将其加入到forget队列
+			 * 这样checkpoint时就不会处理这个缓冲区了
+			 */
 			__journal_file_buffer(jh, transaction, BJ_Forget);
 		} else {
+			/**
+			 * 释放JBD相关资源
+			 */
 			journal_remove_journal_head(bh);
 			__brelse(bh);
 			if (!buffer_jbd(bh)) {
@@ -1262,7 +1380,7 @@ int journal_forget (handle_t *handle, struct buffer_head *bh)
 				return 0;
 			}
 		}
-	} else if (jh->b_transaction) {
+	} else if (jh->b_transaction) {/* 属于其他事务 */
 		J_ASSERT_JH(jh, (jh->b_transaction == 
 				 journal->j_committing_transaction));
 		/* However, if the buffer is still owned by a prior
@@ -1271,7 +1389,7 @@ int journal_forget (handle_t *handle, struct buffer_head *bh)
 		/* ... but we CAN drop it from the new transaction if we
 		 * have also modified it since the original commit. */
 
-		if (jh->b_next_transaction) {
+		if (jh->b_next_transaction) {/* 清除此标志，表示本事务不再处理此缓冲区 */
 			J_ASSERT(jh->b_next_transaction == transaction);
 			jh->b_next_transaction = NULL;
 		}
@@ -1302,6 +1420,8 @@ not_jbd:
  */
 /**
  * 一个日志操作的原子操作已经完成。
+ * 将原子操作与事务断开连接，调整事务的额度。
+ * 如果原子操作是同步的，则同步等待事务完成。
  */
 int journal_stop(handle_t *handle)
 {
@@ -1317,6 +1437,7 @@ int journal_stop(handle_t *handle)
 	else
 		err = 0;
 
+	/* 引用计数大于0，等待最后一个调用者stop */
 	if (--handle->h_ref > 0) {
 		jbd_debug(4, "h_ref %d -> %d\n", handle->h_ref + 1,
 			  handle->h_ref);
@@ -1359,10 +1480,10 @@ int journal_stop(handle_t *handle)
 	 * transaction is occupying too much of the log, or if the
 	 * transaction is too old now.
 	 */
-	if (handle->h_sync ||
+	if (handle->h_sync || /* 当前原子操作要求同步处理 */
 			transaction->t_outstanding_credits >
-				journal->j_max_transaction_buffers ||
-	    		time_after_eq(jiffies, transaction->t_expires)) {
+				journal->j_max_transaction_buffers || /* 当前事务缓冲区过多 */
+	    		time_after_eq(jiffies, transaction->t_expires)) { /* 超时 */
 		/* Do this even for aborted journals: an abort still
 		 * completes the commit thread, it just doesn't write
 		 * anything to disk. */
@@ -1372,6 +1493,7 @@ int journal_stop(handle_t *handle)
 		jbd_debug(2, "transaction too old, requesting commit for "
 					"handle %p\n", handle);
 		/* This is non-blocking */
+		/* 唤醒日志线程，处理该事务 */
 		__log_start_commit(journal, transaction->t_tid);
 		spin_unlock(&journal->j_state_lock);
 
@@ -1380,12 +1502,14 @@ int journal_stop(handle_t *handle)
 		 * to wait for the commit to complete.  
 		 */
 		if (handle->h_sync && !(current->flags & PF_MEMALLOC))
+			/* 同步等待日志线程将事务提交 */
 			err = log_wait_commit(journal, tid);
 	} else {
 		spin_unlock(&transaction->t_handle_lock);
 		spin_unlock(&journal->j_state_lock);
 	}
 
+	/* 释放原子操作描述符 */
 	jbd_free_handle(handle);
 	return err;
 }

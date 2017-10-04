@@ -135,6 +135,7 @@ struct buffer_head {
 	bh_end_io_t *b_end_io;		/* I/O completion */
 	/**
 	 * 指向IO完成方法数据的指针
+	 * 对于JBD来说，是管理该缓冲区的journal_head
 	 */
  	void *b_private;		/* reserved for b_end_io */
 	/**

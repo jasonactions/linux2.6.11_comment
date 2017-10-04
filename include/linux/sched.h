@@ -1073,6 +1073,7 @@ struct task_struct {
 /* journalling filesystem info */
 	/**
 	 * 当前活动日志操作处理的地址。
+	 * 正在使用的原子操作对象。
 	 */
 	void *journal_info;
 

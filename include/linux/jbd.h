@@ -690,6 +690,10 @@ struct transaction_s
 	 * When will the transaction expire (become due for commit), in jiffies?
 	 * [no locking]
 	 */
+	/**
+	 * 事务的超时时间
+	 * 当超过此时间时，即使事务中缓冲区较少，也会提交。
+	 */
 	unsigned long		t_expires;
 
 	/*
@@ -833,12 +837,21 @@ struct journal_s
 	wait_queue_head_t	j_wait_logspace;
 
 	/* Wait queue for waiting for commit to complete */
+	/**
+	 * 等待队列
+	 * 线程正在此队列上等待日志被提交
+	 * 由日志线程唤醒队列上的等待线程
+	 */
 	wait_queue_head_t	j_wait_done_commit;
 
 	/* Wait queue to trigger checkpointing */
 	wait_queue_head_t	j_wait_checkpoint;
 
 	/* Wait queue to trigger commit */
+	/**
+	 * 等待队列
+	 * 日志线程会在此队列上等待
+	 */
 	wait_queue_head_t	j_wait_commit;
 
 	/* Wait queue to wait for updates to complete */
@@ -893,6 +906,9 @@ struct journal_s
 	 * 日志块设备
 	 */
 	struct block_device	*j_dev;
+	/**
+	 * 块大小
+	 */
 	int			j_blocksize;
 	/* 日志在块设备中偏移量 */
 	unsigned int		j_blk_offset;
@@ -900,6 +916,9 @@ struct journal_s
 	/*
 	 * Device which holds the client fs.  For internal journal this will be
 	 * equal to j_dev.
+	 */
+	/**
+	 * 与日志绑定的文件系统，其所在的设备
 	 */
 	struct block_device	*j_fs_dev;
 
@@ -942,7 +961,11 @@ struct journal_s
 	 * Sequence number of the most recent transaction wanting commit
 	 * [j_state_lock]
 	 */
-	/* 最近想提交的事务编号 */
+	/**
+	 * 最近想提交的事务编号 
+	 * 调用者在该事务ID上调用了journal_stop
+	 * 并且希望提交此事务
+	 */
 	tid_t			j_commit_request;
 
 	/*
@@ -1246,9 +1269,11 @@ static inline int jbd_space_needed(journal_t *journal)
 /* journaling buffer types */
 #define BJ_None		0	/* Not journaled */
 #define BJ_SyncData	1	/* Normal data: flush before commit */
+/* 缓冲区位于元数据队列 */
 #define BJ_Metadata	2	/* Normal journaled metadata */
 #define BJ_Forget	3	/* Buffer superseded by this transaction */
 #define BJ_IO		4	/* Buffer is for temporary IO use */
+/* 缓冲区位于Shadow队列，表示正在写入日志 */
 #define BJ_Shadow	5	/* Buffer contents being shadowed to the log */
 #define BJ_LogCtl	6	/* Buffer contains log descriptors */
 #define BJ_Reserved	7	/* Buffer is reserved for access by journal */

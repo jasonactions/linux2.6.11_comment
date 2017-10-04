@@ -488,18 +488,23 @@ void ext3_free_blocks(handle_t *handle, struct inode *inode,
  * data-writes at some point, and disable it for metadata allocations or
  * sync-data inodes.
  */
+/**
+ * 判断某个块是否可以分配
+ */
 static int ext3_test_allocatable(int nr, struct buffer_head *bh)
 {
 	int ret;
 	struct journal_head *jh = bh2jh(bh);
 
+	/* 内存块中，相应位为1，不能分配 */
 	if (ext3_test_bit(nr, bh->b_data))
 		return 0;
 
 	jbd_lock_bh_state(bh);
-	if (!jh->b_committed_data)
+	if (!jh->b_committed_data) /* 没有JBD在申请其undo访问 */
 		ret = 1;
 	else
+		/* 待提交的块中，是否允许分配? */
 		ret = !ext3_test_bit(nr, jh->b_committed_data);
 	jbd_unlock_bh_state(bh);
 	return ret;

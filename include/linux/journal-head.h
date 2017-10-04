@@ -56,7 +56,7 @@ struct journal_head {
 	 * uncommitted deletes. [jbd_lock_bh_state()]
 	 */
 	/**
-	 * 已经删除的磁盘缓冲区
+	 * 位图磁盘缓冲区
 	 * 这里将其复制一份写到日志中
 	 */
 	char *b_committed_data;
