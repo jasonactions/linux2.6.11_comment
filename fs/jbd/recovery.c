@@ -27,11 +27,16 @@
  * Maintain information about the progress of the recovery job, so that
  * the different passes can carry information between them. 
  */
+/**
+ * 恢复日志所用信息
+ */
 struct recovery_info 
 {
+	/* 起止事务号 */
 	tid_t		start_transaction;
 	tid_t		end_transaction;
 
+	/* so obvious */
 	int		nr_replays;
 	int		nr_revokes;
 	int		nr_revoke_hits;
@@ -229,6 +234,9 @@ do {									\
  * blocks.  In the third and final pass, we replay any un-revoked blocks
  * in the log.  
  */
+/**
+ * 日志恢复主函数
+ */
 int journal_recover(journal_t *journal)
 {
 	int			err;
@@ -245,17 +253,24 @@ int journal_recover(journal_t *journal)
 	 * unmounted.  
 	 */
 
+	/* 文件系统被正常卸载 */
 	if (!sb->s_start) {
 		jbd_debug(1, "No recovery required, last transaction %d\n",
 			  be32_to_cpu(sb->s_sequence));
+		/**
+		 * 递增日志序号，退出
+		 */
 		journal->j_transaction_sequence = be32_to_cpu(sb->s_sequence) + 1;
 		return 0;
 	}
 
+	/* 找到日志的终点和起点 */
 	err = do_one_pass(journal, &info, PASS_SCAN);
 	if (!err)
+		/* 找到撤销块，将其信息读到哈希表中 */
 		err = do_one_pass(journal, &info, PASS_REVOKE);
 	if (!err)
+		/* 根据日志描述符的指示，将数据恢复到磁盘 */
 		err = do_one_pass(journal, &info, PASS_REPLAY);
 
 	jbd_debug(0, "JBD: recovery, exit status %d, "
@@ -266,9 +281,14 @@ int journal_recover(journal_t *journal)
 
 	/* Restart the log at the next transaction ID, thus invalidating
 	 * any existing commit records in the log. */
+	/**
+	 * 递增日志序号，使其无效
+	 */
 	journal->j_transaction_sequence = ++info.end_transaction;
 
+	/* 清空撤销表 */
 	journal_clear_revoke(journal);
+	/* 同步日志磁盘数据 */
 	sync_blockdev(journal->j_fs_dev);
 	return err;
 }
@@ -339,7 +359,9 @@ static int do_one_pass(journal_t *journal,
 	 */
 
 	sb = journal->j_superblock;
+	/* 下一个事务号 */
 	next_commit_ID = be32_to_cpu(sb->s_sequence);
+	/* 下一个要读取的日志块号 */
 	next_log_block = be32_to_cpu(sb->s_start);
 
 	first_commit_ID = next_commit_ID;
@@ -355,6 +377,9 @@ static int do_one_pass(journal_t *journal,
 	 * into the main filesystem. 
 	 */
 
+	/**
+	 * 遍历所有块
+	 */
 	while (1) {
 		int			flags;
 		char *			tagp;
@@ -380,11 +405,13 @@ static int do_one_pass(journal_t *journal,
 		 * record. */
 
 		jbd_debug(3, "JBD: checking block %ld\n", next_log_block);
+		/* 读当前块 */
 		err = jread(&bh, journal, next_log_block);
 		if (err)
 			goto failed;
 
 		next_log_block++;
+		/* 环形缓冲区，回绕处理 */
 		wrap(journal, next_log_block);
 
 		/* What kind of buffer is it? 
@@ -395,16 +422,22 @@ static int do_one_pass(journal_t *journal,
 
 		tmp = (journal_header_t *)bh->b_data;
 
+		/**
+		 * 不是日志描述块
+		 * 注意在提交日志时，元数据块是转义了的
+		 */
 		if (tmp->h_magic != cpu_to_be32(JFS_MAGIC_NUMBER)) {
 			brelse(bh);
 			break;
 		}
 
+		/* 描述块类型及事务序号 */
 		blocktype = be32_to_cpu(tmp->h_blocktype);
 		sequence = be32_to_cpu(tmp->h_sequence);
 		jbd_debug(3, "Found magic %d, sequence %d\n", 
 			  blocktype, sequence);
 
+		/* 和预期序号不符，退 */
 		if (sequence != next_commit_ID) {
 			brelse(bh);
 			break;
@@ -415,11 +448,13 @@ static int do_one_pass(journal_t *journal,
 		 * to do with it?  That depends on the pass... */
 
 		switch(blocktype) {
+		/* 描述符块，后跟元数据 */
 		case JFS_DESCRIPTOR_BLOCK:
 			/* If it is a valid descriptor block, replay it
 			 * in pass REPLAY; otherwise, just skip over the
 			 * blocks it describes. */
 			if (pass != PASS_REPLAY) {
+				/* 计算数据块有多少 */
 				next_log_block +=
 					count_tags(bh, journal->j_blocksize);
 				wrap(journal, next_log_block);
@@ -431,18 +466,24 @@ static int do_one_pass(journal_t *journal,
 			 * the data blocks.  Yay, useful work is finally
 			 * getting done here! */
 
+			/**
+			 * 这里开始执行replay操作
+			 * 先读出日志块的头
+			 */
 			tagp = &bh->b_data[sizeof(journal_header_t)];
 			while ((tagp - bh->b_data +sizeof(journal_block_tag_t))
-			       <= journal->j_blocksize) {
+			       <= journal->j_blocksize) {/* 遍历一个整块，找tag */
 				unsigned long io_block;
 
 				tag = (journal_block_tag_t *) tagp;
 				flags = be32_to_cpu(tag->t_flags);
 
+				/* 下一个元数据块 */
 				io_block = next_log_block++;
 				wrap(journal, next_log_block);
+				/* 将元数据读到内存中 */
 				err = jread(&obh, journal, io_block);
-				if (err) {
+				if (err) {/* :( */
 					/* Recover what we can, but
 					 * report failure at the end. */
 					success = err;
@@ -454,11 +495,13 @@ static int do_one_pass(journal_t *journal,
 					unsigned long blocknr;
 
 					J_ASSERT(obh != NULL);
+					/* 目标文件的块号 */
 					blocknr = be32_to_cpu(tag->t_blocknr);
 
 					/* If the block has been
 					 * revoked, then we're all done
 					 * here. */
+					/* 位于撤销块，省点事情，略过 */
 					if (journal_test_revoke
 					    (journal, blocknr, 
 					     next_commit_ID)) {
@@ -469,10 +512,15 @@ static int do_one_pass(journal_t *journal,
 
 					/* Find a buffer for the new
 					 * data being restored */
+					/**
+					 * 读取目标文件系统的数据
+					 * 要被覆盖的，但是也需要读
+					 * 这样才能在块设备层中形成缓存
+					 */
 					nbh = __getblk(journal->j_fs_dev,
 							blocknr,
 							journal->j_blocksize);
-					if (nbh == NULL) {
+					if (nbh == NULL) {/* :( */
 						printk(KERN_ERR 
 						       "JBD: Out of memory "
 						       "during recovery.\n");
@@ -482,19 +530,31 @@ static int do_one_pass(journal_t *journal,
 						goto failed;
 					}
 
+					/* 锁定目标块 */
 					lock_buffer(nbh);
+					/* 从日志中复制数据过去 */
 					memcpy(nbh->b_data, obh->b_data,
 							journal->j_blocksize);
+					/* 转义了 */
 					if (flags & JFS_FLAG_ESCAPE) {
+						/* 恢复被转义的字节 */
 						*((__be32 *)bh->b_data) =
 						cpu_to_be32(JFS_MAGIC_NUMBER);
 					}
 
+					/* balabala，扫尾 */
 					BUFFER_TRACE(nbh, "marking dirty");
+					/**
+					 * 这里仅仅是标记脏
+					 */
 					set_buffer_uptodate(nbh);
 					mark_buffer_dirty(nbh);
 					BUFFER_TRACE(nbh, "marking uptodate");
 					++info->nr_replays;
+					/**
+					 * 这里也没有提交块，代码被注释掉了
+					 * 能嗅出一点什么不对的地方吗?
+					 */
 					/* ll_rw_block(WRITE, 1, &nbh); */
 					unlock_buffer(nbh);
 					brelse(obh);
@@ -513,6 +573,7 @@ static int do_one_pass(journal_t *journal,
 			brelse(bh);
 			continue;
 
+		/* 提交块，应当开启下一个事务 */
 		case JFS_COMMIT_BLOCK:
 			/* Found an expected commit block: not much to
 			 * do other than move on to the next sequence
@@ -521,14 +582,19 @@ static int do_one_pass(journal_t *journal,
 			next_commit_ID++;
 			continue;
 
+		/* 撤销块 */
 		case JFS_REVOKE_BLOCK:
 			/* If we aren't in the REVOKE pass, then we can
 			 * just skip over this block. */
-			if (pass != PASS_REVOKE) {
+			if (pass != PASS_REVOKE) {/* 仅仅在第二步才有用 */
 				brelse(bh);
 				continue;
 			}
 
+			/**
+			 * 第二步
+			 * 将撤销块记录到内存中
+			 */
 			err = scan_revoke_records(journal, bh,
 						  next_commit_ID, info);
 			brelse(bh);
@@ -536,6 +602,7 @@ static int do_one_pass(journal_t *journal,
 				goto failed;
 			continue;
 
+		/* 撞上鬼了 */
 		default:
 			jbd_debug(3, "Unrecognised magic %d, end of scan.\n",
 				  blocktype);
@@ -551,8 +618,9 @@ static int do_one_pass(journal_t *journal,
 	 * transaction marks the end of the valid log.
 	 */
 
+	/* 第一遍遍历 */
 	if (pass == PASS_SCAN)
-		info->end_transaction = next_commit_ID;
+		info->end_transaction = next_commit_ID;/* 记录下起止事务号即可 */
 	else {
 		/* It's really bad news if different passes end up at
 		 * different places (but possible due to IO errors). */
@@ -582,17 +650,21 @@ static int scan_revoke_records(journal_t *journal, struct buffer_head *bh,
 
 	header = (journal_revoke_header_t *) bh->b_data;
 	offset = sizeof(journal_revoke_header_t);
+	/* 撤销块占用的字节数 */
 	max = be32_to_cpu(header->r_count);
 
-	while (offset < max) {
+	while (offset < max) {/* 遍历磁盘上所有字节 */
 		unsigned long blocknr;
 		int err;
 
+		/* 被撤销的块号 */
 		blocknr = be32_to_cpu(* ((__be32 *) (bh->b_data+offset)));
 		offset += 4;
+		/* 记录到内存中 */
 		err = journal_set_revoke(journal, blocknr, sequence);
 		if (err)
 			return err;
+		/* 撤销块计数 */
 		++info->nr_revokes;
 	}
 	return 0;

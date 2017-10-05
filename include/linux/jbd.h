@@ -191,6 +191,7 @@ typedef struct journal_block_tag_s
 typedef struct journal_revoke_header_s
 {
 	journal_header_t r_header;
+	/* 占用字节数，含头 */
 	__be32		 r_count;	/* Count of bytes used in the block */
 } journal_revoke_header_t;
 

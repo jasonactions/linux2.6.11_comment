@@ -654,14 +654,17 @@ int journal_set_revoke(journal_t *journal,
 {
 	struct jbd_revoke_record_s *record;
 
+	/* 撤销块在哈希表中存在吗? */
 	record = find_revoke_record(journal, blocknr);
-	if (record) {
+	if (record) {/* 存在 */
 		/* If we have multiple occurrences, only record the
 		 * latest sequence number in the hashed record */
+		/* 新的事务序号更大吗? */
 		if (tid_gt(sequence, record->sequence))
-			record->sequence = sequence;
+			record->sequence = sequence;/* 记录最新的事务号 */
 		return 0;
 	} 
+	/* 还不存在，直接插入到哈希表 */
 	return insert_revoke_hash(journal, blocknr, sequence);
 }
 
