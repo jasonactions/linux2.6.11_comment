@@ -148,6 +148,7 @@ void journal_commit_transaction(journal_t *journal)
 	 * 第一个阶段
 	 * 将事务从运行状态转换为锁定状态。
 	 * 这意味着事务不再接受新的原子操作。
+	 * 因为日志线程可能是到期了，需要强制结束当前事务。
 	 */
 	jbd_debug(1, "JBD: starting commit of transaction %d\n",
 			commit_transaction->t_tid);
@@ -164,7 +165,7 @@ void journal_commit_transaction(journal_t *journal)
 
 		prepare_to_wait(&journal->j_wait_updates, &wait,
 					TASK_UNINTERRUPTIBLE);
-		if (commit_transaction->t_updates) {
+		if (commit_transaction->t_updates) { /* 还有原子操作在其上运行 */
 			spin_unlock(&commit_transaction->t_handle_lock);
 			spin_unlock(&journal->j_state_lock);
 			schedule();
@@ -196,7 +197,7 @@ void journal_commit_transaction(journal_t *journal)
 	 */
 	/**
 	 * 在初始化事务时，有一些预留的缓存区。
-	 * 这些缓冲区可能没有被使用，因此 
+	 * 这些缓冲区可能没有被使用，在此将其释放
 	 */
 	while (commit_transaction->t_reserved_list) {
 		jh = commit_transaction->t_reserved_list;
@@ -204,6 +205,10 @@ void journal_commit_transaction(journal_t *journal)
 		/*
 		 * A journal_get_undo_access()+journal_release_buffer() may
 		 * leave undo-committed data.
+		 */
+		/**
+		 * journal_get_undo_access可能是复制一份位图缓冲区
+		 * 这里将其释放
 		 */
 		if (jh->b_committed_data) {
 			struct buffer_head *bh = jh2bh(jh);
@@ -215,6 +220,7 @@ void journal_commit_transaction(journal_t *journal)
 			}
 			jbd_unlock_bh_state(bh);
 		}
+		/* 从链表中摘除，并进行一些释放操作 */
 		journal_refile_buffer(journal, jh);
 	}
 
@@ -251,6 +257,10 @@ void journal_commit_transaction(journal_t *journal)
 	 */
 	journal->j_running_transaction = NULL;
 	commit_transaction->t_log_start = journal->j_head;
+	/**
+	 * 已经可以开始新事务了
+	 * 唤醒等待的事务
+	 */
 	wake_up(&journal->j_wait_transaction_locked);
 	spin_unlock(&journal->j_state_lock);
 
@@ -282,16 +292,25 @@ write_out_data:
 	/**
 	 * 首先将数据缓冲区写入到磁盘。
 	 */
-	while (commit_transaction->t_sync_datalist) {
+	while (commit_transaction->t_sync_datalist) {/* 遍历数据缓冲区链表 */
 		struct buffer_head *bh;
 
+		/* 摘除头节点 */
 		jh = commit_transaction->t_sync_datalist;
 		commit_transaction->t_sync_datalist = jh->b_tnext;
 		bh = jh2bh(jh);
+		/**
+		 * 这里试图提交时
+		 * 后台也在提交，冲突
+		 */
 		if (buffer_locked(bh)) {
 			BUFFER_TRACE(bh, "locked");
 			if (!inverted_lock(journal, bh))
 				goto write_out_data;
+			/**
+			 * 从sync_data链表取出来，放到lock链表中
+			 * 等待后面提交
+			 */
 			__journal_unfile_buffer(jh);
 			__journal_file_buffer(jh, commit_transaction,
 						BJ_Locked);
@@ -301,7 +320,7 @@ write_out_data:
 				goto write_out_data;
 			}
 		} else {
-			if (buffer_dirty(bh)) {
+			if (buffer_dirty(bh)) {/* 缓冲区真的为脏，写入 */
 				BUFFER_TRACE(bh, "start journal writeout");
 				get_bh(bh);
 				wbuf[bufs++] = bh;
@@ -314,20 +333,34 @@ write_out_data:
 					spin_unlock(&journal->j_list_lock);
 					/**
 					 * 将缓冲区直接提交到磁盘中，注意不是日志中。
+					 * 这里仅仅是发出IO请求
 					 */
 					ll_rw_block(WRITE, bufs, wbuf);
+					/* against get_bh */
 					journal_brelse_array(wbuf, bufs);
 					bufs = 0;
 					goto write_out_data;
 				}
-			} else {
+			} else {/* 没有脏，不用写入 */
 				BUFFER_TRACE(bh, "writeout complete: unfile");
 				if (!inverted_lock(journal, bh))
+					/**
+					 * 这里不应当跳回去
+					 * 会造成内存泄漏
+					 * 因为此时节点已经从链表中摘除了
+					 */
 					goto write_out_data;
+				/**
+				 * 做资源清理工作
+				 */
 				__journal_unfile_buffer(jh);
 				jbd_unlock_bh_state(bh);
 				journal_remove_journal_head(bh);
 				put_bh(bh);
+				/**
+				 * 避免长期占用CPU
+				 * 调度点
+				 */
 				if (lock_need_resched(&journal->j_list_lock)) {
 					spin_unlock(&journal->j_list_lock);
 					goto write_out_data;
@@ -350,31 +383,37 @@ write_out_data:
 	 * Wait for all previously submitted IO to complete.
 	 */
 	/**
-	 * 前面的ll_rw_block操作只是提交了IO请求。
-	 * 这里等待所有请求真正完成。
+	 * 有一些数据块，已经被系统提交了，并处于锁定状态
+	 * 这里等待其完成
 	 */
-	while (commit_transaction->t_locked_list) {
+	while (commit_transaction->t_locked_list) {/* 未在日志系统中提交的请求 */
 		struct buffer_head *bh;
 
 		jh = commit_transaction->t_locked_list->b_tprev;
 		bh = jh2bh(jh);
 		get_bh(bh);
-		if (buffer_locked(bh)) {
+		if (buffer_locked(bh)) {/* 被其他人锁住 */
 			spin_unlock(&journal->j_list_lock);
+			/* 等待解锁 */
 			wait_on_buffer(bh);
 			if (unlikely(!buffer_uptodate(bh)))
 				err = -EIO;
 			spin_lock(&journal->j_list_lock);
 		}
+		/* 临时开一下锁，避免长时间关抢占 */
 		if (!inverted_lock(journal, bh)) {
 			put_bh(bh);
 			spin_lock(&journal->j_list_lock);
 			continue;
 		}
+		/* 在开锁期间，没有谁将它从Locked链表中摘除 */
 		if (buffer_jbd(bh) && jh->b_jlist == BJ_Locked) {
+			/* 从链表中摘除 */
 			__journal_unfile_buffer(jh);
 			jbd_unlock_bh_state(bh);
+			/* 释放描述符 */
 			journal_remove_journal_head(bh);
+			/*against  journal_remove_journal_head */
 			put_bh(bh);
 		} else {
 			jbd_unlock_bh_state(bh);
@@ -387,10 +426,14 @@ write_out_data:
 	if (err)
 		__journal_abort_hard(journal);
 
+	/**
+	 * 构建撤销表
+	 * 会将撤销记录写到LogCtl链表中
+	 */
 	journal_write_revoke_records(journal, commit_transaction);
 
 	/**
-	 * 原数据仍然在内存中，开始处理元数据。
+	 * 元数据仍然在内存中，开始处理元数据。
 	 */
 	jbd_debug(3, "JBD: commit phase 2\n");
 
@@ -416,6 +459,7 @@ write_out_data:
 
 	descriptor = NULL;
 	bufs = 0;
+	/* 遍历元数据链表 */
 	while (commit_transaction->t_buffers) {
 
 		/* Find the next buffer to be journaled... */
@@ -453,12 +497,14 @@ write_out_data:
 
 			jbd_debug(4, "JBD: get descriptor\n");
 
+			/* 分配一个 */
 			descriptor = journal_get_descriptor_buffer(journal);
-			if (!descriptor) {
+			if (!descriptor) {/* 内存不足，只好中止 */
 				__journal_abort_hard(journal);
 				continue;
 			}
 
+			/* bh是描述符在日志中的缓冲区 */
 			bh = jh2bh(descriptor);
 			jbd_debug(4, "JBD: got buffer %llu (%p)\n",
 				(unsigned long long)bh->b_blocknr, bh->b_data);
@@ -472,11 +518,20 @@ write_out_data:
 			first_tag = 1;
 			set_buffer_jwrite(bh);
 			set_buffer_dirty(bh);
+			/**
+			 * 注意
+			 * 这里将描述符块加到wbuf中
+			 * 这样描述符块位于元数据块之前
+			 */
 			wbuf[bufs++] = bh;
 
 			/* Record it so that we can wait for IO
                            completion later */
 			BUFFER_TRACE(bh, "ph3: file as descriptor");
+			/**
+			 * 前面将撤销块写到LogCtl链表
+			 * 这里将元数据控制块写入
+			 */
 			journal_file_buffer(descriptor, commit_transaction,
 					BJ_LogCtl);
 		}
@@ -500,6 +555,7 @@ write_out_data:
 		 * the free space in the log, but this counter is changed
 		 * by journal_next_log_block() also.
 		 */
+		/* 递减可用日志块数量，避免空间不足 */
 		commit_transaction->t_outstanding_credits--;
 
 		/* Bump b_count to prevent truncate from stumbling over
@@ -520,7 +576,8 @@ write_out_data:
 		 */
 		JBUFFER_TRACE(jh, "ph3: write metadata");
 		/**
-		 * 准备元数据到缓冲区中。
+		 * 准备元数据到日志缓冲区中。
+		 * 转义前的放在Shadow中，要写入的放在IO链表中
 		 */
 		flags = journal_write_metadata_buffer(commit_transaction,
 						      jh, &new_jh, blocknr);
@@ -536,6 +593,9 @@ write_out_data:
 		if (!first_tag)
 			tag_flag |= JFS_FLAG_SAME_UUID;
 
+		/**
+		 * 构建描述符块
+		 */
 		tag = (journal_block_tag_t *) tagp;
 		tag->t_blocknr = cpu_to_be32(jh2bh(jh)->b_blocknr);
 		tag->t_flags = cpu_to_be32(tag_flag);
@@ -555,9 +615,9 @@ write_out_data:
 		/**
 		 * 缓冲区数量过多，先提交一次。
 		 */
-		if (bufs == ARRAY_SIZE(wbuf) ||
-		    commit_transaction->t_buffers == NULL ||
-		    space_left < sizeof(journal_block_tag_t) + 16) {
+		if (bufs == ARRAY_SIZE(wbuf) || /* 描述符块中包含的块过多，提交 */
+		    commit_transaction->t_buffers == NULL || /* 所有元数据块都已经处理完 */
+		    space_left < sizeof(journal_block_tag_t) + 16) { /* 剩余描述符空间已经不足处理一个完整的描述符 */
 
 			jbd_debug(4, "JBD: Submit %d IOs\n", bufs);
 
@@ -568,6 +628,9 @@ write_out_data:
 			tag->t_flags |= cpu_to_be32(JFS_FLAG_LAST_TAG);
 
 start_journal_io:
+			/**
+			 * 在日志中提交描述符块和元数据块
+			 */
 			for (i = 0; i < bufs; i++) {
 				struct buffer_head *bh = wbuf[i];
 				lock_buffer(bh);
@@ -580,6 +643,9 @@ start_journal_io:
 
 			/* Force a new descriptor to be generated next
                            time round the loop. */
+                     /**
+                      * 开始新一轮的工作，新建描述符
+                      */
 			descriptor = NULL;
 			bufs = 0;
 		}
@@ -604,21 +670,24 @@ start_journal_io:
 	 */
 wait_for_iobuf:
 	/**
-	 * 还有没有完成的IO。先等待元数据写入完毕。
+	 * 那些需要等待其完成完成的IO。
+	 * 例如元数据及其控制头
 	 */
 	while (commit_transaction->t_iobuf_list != NULL) {
 		struct buffer_head *bh;
 
+		/* 取尾节点，我猜想这样可以少消耗一点CPU */
 		jh = commit_transaction->t_iobuf_list->b_tprev;
 		bh = jh2bh(jh);
-		if (buffer_locked(bh)) {
-			wait_on_buffer(bh);
+		if (buffer_locked(bh)) {/* 还没有完成 */
+			wait_on_buffer(bh);/* 等待解锁，完成IO */
 			goto wait_for_iobuf;
 		}
 		if (cond_resched())
 			goto wait_for_iobuf;
 
 		/**
+		 * 运行到这里，说明写入操作完成
 		 * 写入失败了，严重的IO错误
 		 */
 		if (unlikely(!buffer_uptodate(bh)))
@@ -627,6 +696,7 @@ wait_for_iobuf:
 		clear_buffer_jwrite(bh);
 
 		JBUFFER_TRACE(jh, "ph4: unfile after journal write");
+		/* 从IO链表中摘除 */
 		journal_unfile_buffer(journal, jh);
 
 		/*
@@ -634,6 +704,7 @@ wait_for_iobuf:
 		 * which were created by journal_write_metadata_buffer().
 		 */
 		BUFFER_TRACE(bh, "dumping temporary bh");
+		/* 释放内存 */
 		journal_put_journal_head(jh);
 		__brelse(bh);
 		J_ASSERT_BH(bh, atomic_read(&bh->b_count) == 0);
@@ -641,6 +712,9 @@ wait_for_iobuf:
 
 		/* We also have to unlock and free the corresponding
                    shadowed buffer */
+              /**
+               * Shadow链表中，是对应的原始缓冲区
+               */
 		jh = commit_transaction->t_shadow_list->b_tprev;
 		bh = jh2bh(jh);
 		clear_bit(BH_JWrite, &bh->b_state);
@@ -651,9 +725,18 @@ wait_for_iobuf:
                    we finally commit, we can do any checkpointing
                    required. */
 		JBUFFER_TRACE(jh, "file as BJ_Forget");
+		/**
+		 * 将其放到Forget链表中
+		 * 用于checkpoint处理
+		 */
 		journal_file_buffer(jh, commit_transaction, BJ_Forget);
 		/* Wake up any transactions which were waiting for this
 		   IO to complete */
+		 /**
+		  * 现在，我们已经用完了块缓冲区
+		  * 可以唤醒等待写这个缓冲区的线程了
+		  * 那个线程正在调用do_get_write_access以获得写权限
+		  */
 		wake_up_bit(&bh->b_state, BH_Unshadow);
 		JBUFFER_TRACE(jh, "brelse shadowed buffer");
 		__brelse(bh);
@@ -667,6 +750,7 @@ wait_for_iobuf:
  wait_for_ctlbuf:
  	/**
 	 * 等待控制块写入完毕。
+	 * 以及撤销块
 	 */
 	while (commit_transaction->t_log_list != NULL) {
 		struct buffer_head *bh;
@@ -685,6 +769,7 @@ wait_for_iobuf:
 
 		BUFFER_TRACE(bh, "ph5: control buffer writeout done: unfile");
 		clear_buffer_jwrite(bh);
+		/* 从链表中摘除 */
 		journal_unfile_buffer(journal, jh);
 		journal_put_journal_head(jh);
 		__brelse(bh);		/* One for getblk */
@@ -735,6 +820,9 @@ wait_for_iobuf:
 
 		set_buffer_dirty(bh);
 		if (journal->j_flags & JFS_BARRIER) {
+			/* 必须标记本次IO的屏障属性
+			 * 防止与前面的操作乱序
+			 */
 			set_buffer_ordered(bh);
 			barrier_done = 1;
 		}
@@ -747,6 +835,11 @@ wait_for_iobuf:
 		 * trust the barrier flag in the super, but instead want
 		 * to remember if we sent a barrier request
 		 */
+		/**
+		 * EOPNOTSUPP表示设备不支持屏障操作
+		 * 这时，我们也没有办法
+		 * 另外一种可能性，是它本身就不乱序
+		 */
 		if (ret == -EOPNOTSUPP && barrier_done) {
 			char b[BDEVNAME_SIZE];
 
@@ -755,10 +848,16 @@ wait_for_iobuf:
 				"disabling barriers\n",
 				bdevname(journal->j_dev, b));
 			spin_lock(&journal->j_state_lock);
+			/**
+			 * 设备不支持，去除此标志
+			 * 自求多福吧，我们暂且认为设备不会乱序
+			 * 实际上，目前很少有设备会乱序
+			 */
 			journal->j_flags &= ~JFS_BARRIER;
 			spin_unlock(&journal->j_state_lock);
 
 			/* And try again, without the barrier */
+			/* 清除标记后再次提交 */
 			clear_buffer_ordered(bh);
 			set_buffer_uptodate(bh);
 			set_buffer_dirty(bh);
@@ -767,6 +866,7 @@ wait_for_iobuf:
 		if (unlikely(ret == -EIO))
 			err = -EIO;
 		put_bh(bh);		/* One for getblk() */
+		/* 可以释放journal_head资源了 */
 		journal_put_journal_head(descriptor);
 	}
 
@@ -775,6 +875,9 @@ wait_for_iobuf:
            transaction can be removed from any checkpoint list it was on
            before. */
 
+	/**
+	 * 提交块已经写入完毕，现在可以进行checkpoint处理了。
+	 */
 skip_commit: /* The journal should be unlocked by now. */
 
 	if (err)
@@ -830,6 +933,11 @@ restart_loop:
 		}
 
 		spin_lock(&journal->j_list_lock);
+		/**
+		 * 上一个事务在用此缓冲区
+		 * 首先将它摘除下来
+		 * 稍后放到当前事务的checkpoint链表中
+		 */
 		cp_transaction = jh->b_cp_transaction;
 		if (cp_transaction) {
 			JBUFFER_TRACE(jh, "remove from old cp transaction");
@@ -857,13 +965,15 @@ restart_loop:
 
 		if (buffer_jbddirty(bh)) {
 			JBUFFER_TRACE(jh, "add to new checkpointing trans");
+			/* 加入到事务的checkpoint链表 */
 			__journal_insert_checkpoint(jh, commit_transaction);
 			JBUFFER_TRACE(jh, "refile for checkpoint writeback");
 			__journal_refile_buffer(jh);
 			jbd_unlock_bh_state(bh);
-		} else {
+		} else {/* 不脏，也就不用加入到checkpoint链表了 */
 			J_ASSERT_BH(bh, !buffer_dirty(bh));
 			J_ASSERT_JH(jh, jh->b_next_transaction == NULL);
+			/* 从现有链表中摘除，并释放 */
 			__journal_unfile_buffer(jh);
 			jbd_unlock_bh_state(bh);
 			journal_remove_journal_head(bh);  /* needs a brelse */
@@ -900,6 +1010,9 @@ restart_loop:
 	journal->j_committing_transaction = NULL;
 	spin_unlock(&journal->j_state_lock);
 
+	/**
+	 * 将事务链接到日志的checkpoint链表中
+	 */
 	if (commit_transaction->t_checkpoint_list == NULL) {
 		__journal_drop_transaction(journal, commit_transaction);
 	} else {
@@ -918,6 +1031,13 @@ restart_loop:
 				commit_transaction;
 		}
 	}
+	/**
+	 * 注意
+	 * 这里并不处理checkpoint
+	 * 当日志没有空间，或者umount时
+	 * 才会真正去等待checkpoint以回收日志空间
+	 * 也就是说，内存中有不少buffer_head对象
+	 */
 	spin_unlock(&journal->j_list_lock);
 
 	jbd_debug(1, "JBD: commit %d complete, head %d\n",

@@ -533,6 +533,7 @@ struct transaction_s
 		/**
 		 * 事务正准备被提交到日志中。
 		 * 新的原子操作，需要放到新的事务中。
+		 * 同时正在将数据块提交到磁盘
 		 */
 		T_FLUSH,
 		/**
@@ -623,6 +624,8 @@ struct transaction_s
 	/**
 	 * 当前正在等待IO写入的链表。
 	 * 此链表中的数据，包含了要写入到日志中的元数据缓冲区。
+	 * 以及撤销表等等
+	 * 需要等待此链表中数据全部写入后，才能写入提交块
 	 */
 	struct journal_head	*t_iobuf_list;
 
@@ -673,6 +676,7 @@ struct transaction_s
 	 */
 	/**
 	 * 保留给原子操作使用，但是还没有被使用的缓冲区额度
+	 * 在写日志时递减
 	 */
 	int			t_outstanding_credits;
 
@@ -682,7 +686,7 @@ struct transaction_s
 	 */
 	/**
 	 * 通过这两个指针
-	 * 将事务链接到checkpoint队列中
+	 * 将事务链接到日志的checkpoint队列中
 	 */
 	transaction_t		*t_cpnext, *t_cpprev;
 
@@ -806,6 +810,7 @@ struct journal_s
 	/**
 	 * 当前正在运行的事务。
 	 * 如果为NULL，需要为新的原子操作创建新的事务。
+	 * 这个事务正在接受新的原子操作请求。
 	 */
 	transaction_t		*j_running_transaction;
 
@@ -831,6 +836,10 @@ struct journal_s
 	 * Wait queue for waiting for a locked transaction to start committing,
 	 * or for a barrier lock to be released
 	 */
+	/**
+	 * 当开始进行一个新事务提交时
+	 * 唤醒等待记录日志的线程，表示可以开始一个新事务了
+	 */
 	wait_queue_head_t	j_wait_transaction_locked;
 
 	/* Wait queue for waiting for checkpointing to complete */
@@ -855,6 +864,11 @@ struct journal_s
 	wait_queue_head_t	j_wait_commit;
 
 	/* Wait queue to wait for updates to complete */
+	/**
+	 * 等待队列
+	 * 日志线程在此队列上等待
+	 * 当结束原子操作时唤醒
+	 */
 	wait_queue_head_t	j_wait_updates;
 
 	/* Semaphore for locking against concurrent checkpoints */
@@ -1023,6 +1037,7 @@ struct journal_s
 #define JFS_ACK_ERR	0x004	/* The errno in the sb has been acked */
 #define JFS_FLUSHED	0x008	/* The journal superblock has been flushed */
 #define JFS_LOADED	0x010	/* The journal superblock has been loaded */
+/* 磁盘IO存在乱序问题，需要程序特殊处理 */
 #define JFS_BARRIER	0x020	/* Use IDE barriers */
 
 /* 
@@ -1272,6 +1287,7 @@ static inline int jbd_space_needed(journal_t *journal)
 /* 缓冲区位于元数据队列 */
 #define BJ_Metadata	2	/* Normal journaled metadata */
 #define BJ_Forget	3	/* Buffer superseded by this transaction */
+/* 转义后的，真正需要写入日志的 */
 #define BJ_IO		4	/* Buffer is for temporary IO use */
 /* 缓冲区位于Shadow队列，表示正在写入日志 */
 #define BJ_Shadow	5	/* Buffer contents being shadowed to the log */

@@ -663,6 +663,10 @@ repeat:
 
 		/* 上一个事务在使用主缓冲区 */
 		if (jh->b_jlist == BJ_Shadow) {
+			/**
+			 * 等待上一个事务结束
+			 * 然后它会唤醒本事务，以开始对bh的写操作。
+			 */
 			DEFINE_WAIT_BIT(wait, &bh->b_state, BH_Unshadow);
 			wait_queue_head_t *wqh;
 

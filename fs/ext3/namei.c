@@ -1629,6 +1629,11 @@ static int ext3_add_nondir(handle_t *handle,
  * If the create succeeds, we fill in the inode information
  * with d_instantiate(). 
  */
+/**
+ * 创建一个新文件
+ *	dir:		父目录的inode
+ *	dentry:	新的目录项，但是还没有与inode关联
+ */
 static int ext3_create (struct inode * dir, struct dentry * dentry, int mode,
 		struct nameidata *nd)
 {
@@ -1637,6 +1642,9 @@ static int ext3_create (struct inode * dir, struct dentry * dentry, int mode,
 	int err, retries = 0;
 
 retry:
+	/**
+	 * 获得原子操作描述符
+	 */
 	handle = ext3_journal_start(dir, EXT3_DATA_TRANS_BLOCKS +
 					EXT3_INDEX_EXTRA_TRANS_BLOCKS + 3 +
 					2*EXT3_QUOTA_INIT_BLOCKS);
@@ -1646,14 +1654,28 @@ retry:
 	if (IS_DIRSYNC(dir))
 		handle->h_sync = 1;
 
+	/**
+	 * 在目录dir所在的块组中分配一个新的inode
+	 * 即在块组的inode位图中寻找一个为0的位，然后标记为1
+	 */
 	inode = ext3_new_inode (handle, dir, mode);
 	err = PTR_ERR(inode);
-	if (!IS_ERR(inode)) {
+	if (!IS_ERR(inode)) {/* 文件 */
+		/**
+		 * 设置文件操作回调函数
+		 */
 		inode->i_op = &ext3_file_inode_operations;
 		inode->i_fop = &ext3_file_operations;
 		ext3_set_aops(inode);
+		/**
+		 * 将新分配的inode与目录项关联起来
+		 * 这样可以查找到文件
+		 */
 		err = ext3_add_nondir(handle, dentry, inode);
 	}
+	/**
+	 *  关闭原子操作描述符
+	 */
 	ext3_journal_stop(handle);
 	if (err == -ENOSPC && ext3_should_retry_alloc(dir->i_sb, &retries))
 		goto retry;

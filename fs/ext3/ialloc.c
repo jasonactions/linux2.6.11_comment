@@ -440,6 +440,7 @@ struct inode *ext3_new_inode(handle_t *handle, struct inode * dir, int mode)
 		return ERR_PTR(-EPERM);
 
 	sb = dir->i_sb;
+	/* 分配一个内存inode */
 	inode = new_inode(sb);
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
@@ -459,11 +460,14 @@ struct inode *ext3_new_inode(handle_t *handle, struct inode * dir, int mode)
 	if (group == -1)
 		goto out;
 
+	/* 遍历所有块组 */
 	for (i = 0; i < sbi->s_groups_count; i++) {
+		/* 找到块组描述符 */
 		gdp = ext3_get_group_desc(sb, group, &bh2);
 
 		err = -EIO;
 		brelse(bitmap_bh);
+		/* 获得块组的inode位图 */
 		bitmap_bh = read_inode_bitmap(sb, group);
 		if (!bitmap_bh)
 			goto fail;
@@ -471,22 +475,30 @@ struct inode *ext3_new_inode(handle_t *handle, struct inode * dir, int mode)
 		ino = 0;
 
 repeat_in_this_group:
+		/**
+		 * 查找第一个未用的磁盘inode
+		 */
 		ino = ext3_find_next_zero_bit((unsigned long *)
 				bitmap_bh->b_data, EXT3_INODES_PER_GROUP(sb), ino);
-		if (ino < EXT3_INODES_PER_GROUP(sb)) {
+		if (ino < EXT3_INODES_PER_GROUP(sb)) {/* 有效的inode编号 */
 			int credits = 0;
 
 			BUFFER_TRACE(bitmap_bh, "get_write_access");
+			/* 取得写权限 */
 			err = ext3_journal_get_write_access_credits(handle,
 							bitmap_bh, &credits);
 			if (err)
 				goto fail;
 
+			/* 设置相应的块组位为1，表示已经占用此块组 */
 			if (!ext3_set_bit_atomic(sb_bgl_lock(sbi, group),
 						ino, bitmap_bh->b_data)) {
 				/* we won it */
 				BUFFER_TRACE(bitmap_bh,
 					"call ext3_journal_dirty_metadata");
+				/**
+				 * 标记节点为脏
+				 */
 				err = ext3_journal_dirty_metadata(handle,
 								bitmap_bh);
 				if (err)
@@ -524,6 +536,9 @@ got:
 	}
 
 	BUFFER_TRACE(bh2, "get_write_access");
+	/**
+	 * 获得块组描述符的写权限
+	 */
 	err = ext3_journal_get_write_access(handle, bh2);
 	if (err) goto fail;
 	spin_lock(sb_bgl_lock(sbi, group));
@@ -535,6 +550,7 @@ got:
 	}
 	spin_unlock(sb_bgl_lock(sbi, group));
 	BUFFER_TRACE(bh2, "call ext3_journal_dirty_metadata");
+	/* 标记块组描述符为脏 */
 	err = ext3_journal_dirty_metadata(handle, bh2);
 	if (err) goto fail;
 
@@ -611,6 +627,7 @@ got:
 		DQUOT_FREE_INODE(inode);
 		goto fail2;
   	}
+	/* 获得inode的写权限，并将其置为脏 */
 	err = ext3_mark_inode_dirty(handle, inode);
 	if (err) {
 		ext3_std_error(sb, err);

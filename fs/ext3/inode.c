@@ -1279,6 +1279,7 @@ static int ext3_ordered_writepage(struct page *page,
 	if (ext3_journal_current_handle())
 		goto out_fail;
 
+	/* 开启日志，获得一个原子操作描述符 */
 	handle = ext3_journal_start(inode, ext3_writepage_trans_blocks(inode));
 
 	if (IS_ERR(handle)) {
@@ -1309,6 +1310,9 @@ static int ext3_ordered_writepage(struct page *page,
 	 * and generally junk.
 	 */
 	if (ret == 0) {
+		/**
+		 * 对页面中的每一个缓冲区，调用journal_dirty_data_fn函数。
+		 */
 		err = walk_page_buffers(handle, page_bufs, 0, PAGE_CACHE_SIZE,
 					NULL, journal_dirty_data_fn);
 		if (!ret)
@@ -1316,6 +1320,7 @@ static int ext3_ordered_writepage(struct page *page,
 	}
 	walk_page_buffers(handle, page_bufs, 0,
 			PAGE_CACHE_SIZE, NULL, bput_one);
+	/* 关闭原子操作符 */
 	err = ext3_journal_stop(handle);
 	if (!ret)
 		ret = err;

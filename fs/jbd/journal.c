@@ -157,10 +157,15 @@ loop:
 	jbd_debug(1, "commit_sequence=%d, commit_request=%d\n",
 		journal->j_commit_sequence, journal->j_commit_request);
 
+	/**
+	 * 希望提交的日志编号，与已经提交的编号不相等
+	 * 说明有提交日志的需求
+	 */
 	if (journal->j_commit_sequence != journal->j_commit_request) {
 		jbd_debug(1, "OK, requests differ\n");
 		spin_unlock(&journal->j_state_lock);
 		del_timer_sync(journal->j_commit_timer);
+		/* 提交日志 */
 		journal_commit_transaction(journal);
 		spin_lock(&journal->j_state_lock);
 		goto loop;
